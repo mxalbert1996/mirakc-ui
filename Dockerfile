@@ -24,9 +24,6 @@ EOF
 
 FROM docker.io/denoland/deno:2.9.8
 
-ARG GIT_REVISION
-ENV DENO_DEPLOYMENT_ID=${GIT_REVISION}
-
 RUN <<EOF
     apt-get update
     apt-get install -y --no-install-recommends ffmpeg
@@ -43,6 +40,10 @@ RUN deno install
 COPY --from=mirakc-ui-build /app/client/dist ./client/dist
 COPY server ./server
 RUN deno cache server/main.ts
+
+# ビルドのたびに変わるため、キャッシュを無効化しないよう最後に置く。
+ARG GIT_REVISION
+ENV DENO_DEPLOYMENT_ID=${GIT_REVISION}
 
 EXPOSE 8000
 
