@@ -38,10 +38,13 @@ FROM docker.io/debian:trixie-slim AS ffmpeg-build
 ARG FFMPEG_VERSION=9.0.2
 ARG X264_VERSION=b35605ace3ddf7c1a5d67a2eb553f034aef41d55
 
+# nasm は x86_64 のアセンブリ実装 (x264 / ffmpeg の x86asm) に必須。aarch64 は gas を
+# 使うため不要だが、マルチアーキテクチャビルドでは linux/amd64 側の configure が
+# "Found no assembler" で失敗するため常に入れる。
 RUN <<EOF
     apt-get update
     apt-get install -y --no-install-recommends \
-        build-essential pkg-config curl ca-certificates xz-utils bzip2
+        build-essential pkg-config curl ca-certificates xz-utils bzip2 nasm
     rm -rf /var/lib/apt/lists/*
 EOF
 
