@@ -22,20 +22,44 @@ RUN <<EOF
     cmake --build /tmp/tsreadex/build
 EOF
 
-FROM docker.io/denoland/deno:2.9.8
+# 実行時イメージ用の Deno バイナリの取得元。ターゲットと同じプラットフォームの
+# イメージから COPY するため、マルチアーキテクチャビルドでも arch が揃う。
+FROM docker.io/denoland/deno:2.9.8 AS deno
+
+# Debian 素のイメージに Deno バイナリだけを載せる (公式イメージは apt 済みの
+# 追加パッケージを含み、実行時には不要な分だけイメージが大きくなる)。
+FROM docker.io/debian:bookworm-slim
 
 RUN <<EOF
     apt-get update
-    apt-get install -y --no-install-recommends ffmpeg
+    apt-get install -y --no-install-recommends ffmpeg tini ca-certificates
     rm -rf /var/lib/apt/lists/*
 EOF
 
+COPY --from=deno /usr/bin/deno /usr/local/bin/deno
 COPY --from=tsreadex-build /tmp/tsreadex/build/tsreadex /usr/local/bin/tsreadex
-RUN chmod +x /usr/local/bin/tsreadex
+RUN chmod +x /usr/local/bin/deno /usr/local/bin/tsreadex
 
 WORKDIR /app
 
+# 実行時に必要な依存だけに絞った設定を作る。deno.json の import マップには
+# client (React / Vite / Storybook / Vitest 等) の依存も含まれるため、そのまま
+# `deno install` すると実行時に一切読まれない npm パッケージ (約 300 MB) が
+# イメージに入る。server/ が import するパッケージだけを deno.json から引き継ぎ、
+# バージョンの情報源は deno.json 1 つに保つ (追加時はここに名前を足す)。
+# 不足があれば次の `deno cache server/main.ts` が解決に失敗してビルドが止まる。
 COPY deno.json deno.lock ./
+RUN <<EOF
+    deno eval '
+    const path = "deno.json";
+    const config = JSON.parse(Deno.readTextFileSync(path));
+    const runtimeDeps = ["hono", "@cfworker/json-schema", "json-schema-to-ts"];
+    config.imports = Object.fromEntries(
+      runtimeDeps.map((specifier) => [specifier, config.imports[specifier]]),
+    );
+    Deno.writeTextFileSync(path, JSON.stringify(config, null, 2) + "\n");
+    '
+EOF
 RUN deno install
 COPY --from=mirakc-ui-build /app/client/dist ./client/dist
 COPY server ./server
@@ -54,4 +78,7 @@ EXPOSE 8000
 
 # Hono が client/dist を serveStatic しつつ /api を提供する。
 # CMD は --env-file を使わず、コンテナの環境変数 (MIRAKC_URL / TZ 等) を直接読む。
-CMD ["serve", "-A", "--port", "8000", "server/main.ts"]
+# ENTRYPOINT は tini のみにして、`docker run <image> ffmpeg` / `sh` のような
+# 任意コマンドの実行を可能にする (deno は CMD 側で指定する)。
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["deno", "serve", "-A", "--port", "8000", "server/main.ts"]
