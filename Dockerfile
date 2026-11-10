@@ -48,9 +48,16 @@ RUN <<EOF
     rm -rf /var/lib/apt/lists/*
 EOF
 
+# ソースの取得 (ここから下の 2 つの RUN) はファイルへ落としてから展開する。
+# `curl | tar` のパイプでは curl の失敗が解凍エラーとして現れて原因が分からなくなる
+# (CI で "curl: (35) Recv failure" が "cd: can't cd to /tmp/ffmpeg-..." になっていた)。
+# --retry-all-errors で一時的な切断を吸収し、set -eu で失敗した時点で止める。
 RUN <<EOF
-    curl -fsSL "https://code.videolan.org/videolan/x264/-/archive/$X264_VERSION/x264-$X264_VERSION.tar.bz2" \
-        | tar -xj -C /tmp
+    set -eu
+    curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+        -o /tmp/x264.tar.bz2 \
+        "https://code.videolan.org/videolan/x264/-/archive/$X264_VERSION/x264-$X264_VERSION.tar.bz2"
+    tar -xjf /tmp/x264.tar.bz2 -C /tmp
     cd "/tmp/x264-$X264_VERSION"
     ./configure --prefix=/usr/local --enable-static --disable-cli --enable-pic
     make -j"$(nproc)"
@@ -66,8 +73,10 @@ EOF
 # - 起動時 probe: lavfi の color 入力と -f null 出力
 # wrapped_avframe / pcm_s16le は lavfi と -f null に必須 (decoder と encoder の両方)。
 RUN <<EOF
-    curl -fsSL "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" \
-        | tar -xJ -C /tmp
+    set -eu
+    curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+        -o /tmp/ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz"
+    tar -xJf /tmp/ffmpeg.tar.xz -C /tmp
     cd "/tmp/ffmpeg-$FFMPEG_VERSION"
     ./configure \
         --disable-everything \
