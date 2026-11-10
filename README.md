@@ -65,7 +65,7 @@ services:
       RUST_LOG: info
 ## from:
   ui:
-    image: ghcr.io/ansanloms/mirakc-ui:latest
+    image: ghcr.io/mxalbert1996/mirakc-ui:latest
     ports:
       - 8888:8000
     volumes:
