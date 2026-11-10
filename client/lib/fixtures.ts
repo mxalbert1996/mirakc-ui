@@ -64,7 +64,8 @@ export const sampleServices: Service[] = [
     type: 1,
     networkId: 4,
     serviceId: 101,
-    remoteControlKeyId: 101,
+    // BS / CS のサービスはリモコン番号を持たず mirakc は 0 を返す。
+    remoteControlKeyId: 0,
     hasLogoData: false,
   },
 ];
@@ -365,7 +366,7 @@ export const demoServices: Service[] = [
     type: 1,
     networkId: 401,
     serviceId: 201,
-    remoteControlKeyId: 201,
+    remoteControlKeyId: 0,
     hasLogoData: false,
   },
   {
@@ -375,7 +376,7 @@ export const demoServices: Service[] = [
     type: 1,
     networkId: 402,
     serviceId: 211,
-    remoteControlKeyId: 211,
+    remoteControlKeyId: 0,
     hasLogoData: false,
   },
 ];

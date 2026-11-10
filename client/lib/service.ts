@@ -78,9 +78,12 @@ export function channelTypeLabel(id: ChannelType): string {
 
 /**
  * ch バッジに出す番号。リモコン番号を優先し、無ければ serviceId。
+ *
+ * BS / CS はリモコン番号を持たず、mirakc はキーを省略せず 0 を返す。
+ * 0 は未設定として扱い、選局番号 (3 桁) と一致する serviceId を出す。
  */
 export function serviceNumber(service: Service): number {
-  return service.remoteControlKeyId ?? service.serviceId;
+  return service.remoteControlKeyId || service.serviceId;
 }
 
 /**
