@@ -6,7 +6,7 @@ COPY . .
 RUN deno install
 RUN deno task build
 
-FROM docker.io/debian:bookworm-slim AS tsreadex-build
+FROM docker.io/debian:trixie-slim AS tsreadex-build
 
 RUN <<EOF
     apt-get update
@@ -30,7 +30,7 @@ FROM docker.io/denoland/deno:2.9.8 AS deno
 # ffmpeg パッケージは libavdevice 経由で mesa/LLVM 等を引き連れ約 410 MB になるが、
 # 実行時に使うのは下記のコーデック・フィルタ・コンテナだけのため、最小構成で十分。
 # 生成物は glibc 以外に依存しないので、実行時ステージに追加パッケージは要らない。
-FROM docker.io/debian:bookworm-slim AS ffmpeg-build
+FROM docker.io/debian:trixie-slim AS ffmpeg-build
 
 # 再現性のためバージョンは固定する。更新はここを書き換えてリビルドし、後述の
 # 実機ストリームでの確認をやり直す (ffmpeg は公式リリースを使う。x264 はリリースが
@@ -94,7 +94,7 @@ EOF
 
 # Debian 素のイメージに Deno バイナリだけを載せる (公式イメージは apt 済みの
 # 追加パッケージを含み、実行時には不要な分だけイメージが大きくなる)。
-FROM docker.io/debian:bookworm-slim
+FROM docker.io/debian:trixie-slim
 
 RUN <<EOF
     apt-get update
