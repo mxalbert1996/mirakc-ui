@@ -2,7 +2,7 @@ name: mirakc-ui
 
 services:
   workspace:
-    image: mcr.microsoft.com/devcontainers/base:bookworm
+    image: mcr.microsoft.com/devcontainers/base:trixie
     entrypoint: []
     command: ["sleep", "infinity"]
     environment:
