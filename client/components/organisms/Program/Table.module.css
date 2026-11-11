@@ -12,10 +12,12 @@
   min-width: 100%;
   /*
    * サービス 1 列の幅。grid-template-columns 自体 (列数) は Table.tsx が services 数に
-   * 応じて組み立て、1 列の幅にこの変数を参照する。PC 既定を広めに取り、モバイル
-   * (<=640px) では従来幅へ戻す。
+   * 応じて組み立て、1 列の幅にこの変数を参照する。PC は 20rem まで詰めて 1440px で
+   * 7 列弱が見えるようにし、モバイル (<=640px) では 17rem へ狭める。
    */
-  --service-col: 24rem;
+  --service-col: 20rem;
+  /* 見出し行の高さ。sticky の追従位置 (時刻ラベル / セル内容 / 列ガイド) が従う。 */
+  --grid-header-h: 6rem;
 }
 
 @container style(--is-mobile: true) {
@@ -34,7 +36,7 @@
   z-index: var(--z-index-grid-corner);
   display: grid;
   place-items: center;
-  height: 6rem;
+  height: var(--grid-header-h);
   border-right: 1px solid var(--color-border);
   background: var(--color-surface-glass);
   -webkit-backdrop-filter: var(--glass-blur);
@@ -55,8 +57,8 @@
   align-items: center;
   justify-content: center;
   gap: 0.4rem;
-  height: 6rem;
-  padding: 0.8rem 0.4rem;
+  height: var(--grid-header-h);
+  padding: 0.4rem;
   border-right: 1px solid var(--color-border);
   background: var(--color-surface-glass);
   -webkit-backdrop-filter: var(--glass-blur);
@@ -70,11 +72,53 @@
   }
 }
 
+/* 番号チップ + 局名の 1 行。列をまたいで局名のベースラインが揃う。 */
+.serviceHeaderLine {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  min-width: 0;
+}
+
 .serviceHeaderName {
   font-size: 1.2rem;
   font-weight: 600;
   text-align: center;
   line-height: 1.2;
+}
+
+/* 列ガイド。見出し / 時刻列の border-right と同じ色で、その延長として全高に敷く。 */
+.columnGuide {
+  position: absolute;
+  top: var(--grid-header-h);
+  bottom: 0;
+  z-index: var(--z-index-grid-column-guide);
+  width: 1px;
+  background: var(--color-border);
+  pointer-events: none;
+}
+
+/*
+ * ロゴ。Mirakurun のロゴ画像は背景 (白 / ブランド色) ごと不透明な絵柄なので、
+ * 下地も余白も付けず絵柄自体を chip として見せる。高さだけ固定し、幅は縦横比の
+ * まま (上限だけ決める) にして、モバイル列でも番号 + 局名と並ぶようにする。
+ */
+.serviceLogo {
+  flex: none;
+  display: grid;
+  place-items: center;
+  max-width: 6.4rem;
+}
+
+.serviceLogoImage {
+  display: block;
+  height: 2.4rem;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+  border-radius: 0.4rem;
 }
 
 /* 時刻列。 */
@@ -92,7 +136,7 @@
 
 .timeNum {
   position: sticky;
-  top: 6rem;
+  top: var(--grid-header-h);
   display: block;
   padding: 0.4rem 0;
   text-align: center;
@@ -153,13 +197,13 @@
 
 /*
  * セル内容。長尺番組をスクロールしてもタイトルが見えるよう sticky で追従させる。
- * top は sticky なヘッダ行 (.serviceHeader / .timeNum, 高さ 6rem) の直下に合わせる。
+ * top は sticky なヘッダ行 (--grid-header-h) の直下に合わせる。
  * 親 .programCell は overflow: clip (スクロールコンテナを作らない) なので、ここの
  * sticky は外側 .scroll を基準に効く。
  */
 .programContent {
   position: sticky;
-  top: 6rem;
+  top: var(--grid-header-h);
 }
 
 /* ジャンル (塗り = fill, 左バー = strong, 文字 = ink)。 */
@@ -232,21 +276,24 @@
 /* 現在時刻ライン。 */
 .nowLine {
   height: 0;
-  border-top: 2px solid var(--color-now);
+  border-top: 1px solid var(--color-now);
   align-self: start;
   z-index: var(--z-index-grid-now-line);
   pointer-events: none;
 }
 
 .nowChip {
+  justify-self: center;
   align-self: start;
   z-index: var(--z-index-grid-now-chip);
-  margin-top: -0.8rem;
+  margin-top: -0.7rem;
+  padding: 0 0.2rem;
+  border-radius: 0.4rem;
   text-align: center;
   font-family: var(--font-family-mono);
   font-weight: 700;
-  font-size: 1.2rem;
-  color: #fff;
-  background: var(--color-now);
-  padding: 0;
+  font-size: 1rem;
+  line-height: 1.4;
+  color: var(--color-now);
+  background: var(--color-surface);
 }

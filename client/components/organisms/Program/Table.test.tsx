@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import ProgramTable from "./Table.tsx";
 import { renderWithRouter } from "../../../lib/test-router.tsx";
 import { zonedFromEpochMs } from "../../../lib/datetime.ts";
@@ -19,10 +19,10 @@ const fromMs = base - 60 * 60 * 1000;
 const toMs = base + 5 * 60 * 60 * 1000;
 const now = base + 10 * 60 * 1000;
 
-function setup(setProgram = () => {}) {
+function setup(setProgram = () => {}, services = sampleServices) {
   return renderWithRouter(
     <ProgramTable
-      services={sampleServices}
+      services={services}
       programs={programs}
       recordingSchedules={sampleSchedules}
       displayFromMs={fromMs}
@@ -75,5 +75,39 @@ describe("ProgramTable", () => {
       '[role="button"]',
     );
     expect(cell?.getAttribute("data-mark")).toBe("recording");
+  });
+
+  it("hasLogoData のサービスは見出しにロゴを出す", async () => {
+    const service = { ...sampleServices[0], hasLogoData: true };
+    setup(() => {}, [service]);
+
+    const logo = await screen.findByRole("img", { name: service.name });
+    expect(logo.getAttribute("src")).toBe(
+      `/api/mirakc/services/${service.id}/logo`,
+    );
+    expect(logo.getAttribute("loading")).toBe("lazy");
+    expect(logo.getAttribute("decoding")).toBe("async");
+    // ロゴがあっても番号バッジと局名は残る。
+    const header = screen.getByRole("link");
+    expect(within(header).getByText(String(service.remoteControlKeyId)))
+      .toBeTruthy();
+    expect(within(header).getByText(service.name)).toBeTruthy();
+  });
+
+  it("hasLogoData の無いサービスはロゴを出さない", async () => {
+    setup();
+    expect(await screen.findByText("ニュース７")).toBeTruthy();
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(screen.getByText("NHK総合")).toBeTruthy();
+  });
+
+  it("ロゴの読み込みに失敗したら番号 + 局名の見出しに戻る", async () => {
+    const service = { ...sampleServices[0], hasLogoData: true };
+    setup(() => {}, [service]);
+
+    const logo = await screen.findByRole("img", { name: service.name });
+    fireEvent.error(logo);
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(screen.getByText(service.name)).toBeTruthy();
   });
 });
