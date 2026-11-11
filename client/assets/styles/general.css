@@ -20,6 +20,17 @@ html {
   color-scheme: light dark;
 }
 
+/* 手動テーマ。lightningcss は light-dark() を downlevel する際、color-scheme を
+   宣言するセレクタへ --lightningcss-light/dark の上書きも生成する。この 2 つの
+   ルールが無いとビルド後の配色が OS 設定にしか追従しない。 */
+html[data-theme="light"] {
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
 body {
   font: var(--font-size-body) var(--font-family-default);
   line-height: 1.6;
