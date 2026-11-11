@@ -4,6 +4,18 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>mirakc-ui</title>
+    <script>
+      // React のマウント前に保存済みテーマを適用し、初回描画のちらつきを防ぐ。
+      // ColorSchemeToggle と同じキー・同じ値 (light | dark | 未設定 = auto)。
+      try {
+        const scheme = localStorage.getItem("color-scheme");
+        if (scheme === "light" || scheme === "dark") {
+          document.documentElement.dataset.theme = scheme;
+        }
+      } catch {
+        // localStorage unavailable
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

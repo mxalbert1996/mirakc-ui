@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import Icon from "../components/atoms/Icon.tsx";
 
 type ColorScheme = "light" | "dark" | "auto";
 
+// client/index.html の初期化スクリプトと同じキー / 値の契約。
 const STORAGE_KEY = "color-scheme";
 
 function getStoredScheme(): ColorScheme {
@@ -19,9 +20,9 @@ function getStoredScheme(): ColorScheme {
 
 function applyScheme(scheme: ColorScheme) {
   if (scheme === "auto") {
-    document.documentElement.style.removeProperty("color-scheme");
+    delete document.documentElement.dataset.theme;
   } else {
-    document.documentElement.style.colorScheme = scheme;
+    document.documentElement.dataset.theme = scheme;
   }
 }
 
@@ -38,18 +39,15 @@ const nextMap: Record<ColorScheme, ColorScheme> = {
 };
 
 export default function ColorSchemeToggle() {
-  const [scheme, setScheme] = useState<ColorScheme>("auto");
+  const [scheme, setScheme] = useState<ColorScheme>(getStoredScheme);
 
-  useEffect(() => {
-    const stored = getStoredScheme();
-    setScheme(stored);
-    applyScheme(stored);
-  }, []);
+  useLayoutEffect(() => {
+    applyScheme(scheme);
+  }, [scheme]);
 
   const toggle = () => {
     const next = nextMap[scheme];
     setScheme(next);
-    applyScheme(next);
     try {
       if (next === "auto") {
         localStorage.removeItem(STORAGE_KEY);
