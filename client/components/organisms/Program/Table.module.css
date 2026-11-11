@@ -102,13 +102,20 @@
   color: var(--color-text-dim);
 }
 
-/* 番組ブロック (塗り + 左バー)。 */
+/* 番組ブロック (塗り + 左バー + 輪郭)。 */
 .programCell {
   position: relative;
   margin: 0;
   padding: 0.4rem 0.8rem;
   border: 1px solid transparent;
   border-left: 4px solid transparent;
+  /*
+   * 輪郭。透明のままだと同ジャンルの番組が縦に連続したとき塗りが繋がり 1 本の
+   * 長い番組に見えるため、境界を常に 1px 見せる。色は .genre* が設定する color
+   * (ink) を薄く敷いた同系色で、セル自身の塗りの上に合成される。左バーは
+   * .genre* の border-left-color が後段で上書きする。
+   */
+  border-color: color-mix(in oklab, currentColor 18%, transparent);
   border-radius: 0.4rem;
   /*
    * overflow: hidden ではなく clip。hidden はスクロールコンテナを生成し、
