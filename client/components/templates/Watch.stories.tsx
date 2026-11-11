@@ -10,6 +10,7 @@ import {
   samplePrograms,
   sampleServices,
 } from "../../lib/fixtures.ts";
+import { sortServices } from "../../lib/service.ts";
 import { nowEpochMs } from "../../lib/datetime.ts";
 import type { ChannelEntry } from "../organisms/Watch/SelectTab.tsx";
 
@@ -22,7 +23,10 @@ function buildChannels(
   programs: Program[],
   now: number,
 ): ChannelEntry[] {
-  return services.filter((s) => s.channel.type === "GR").map((service) => {
+  const grServices = sortServices(services).filter((s) =>
+    s.channel.type === "GR"
+  );
+  return grServices.map((service) => {
     const program = programs.find((p) =>
       p.networkId === service.networkId && p.serviceId === service.serviceId &&
       p.startAt <= now && now < p.startAt + p.duration

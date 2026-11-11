@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { KeywordRule } from "../../../lib/api/keyword-rules.ts";
-import type { ChannelGroup } from "../../../lib/service.ts";
+import { type ChannelGroup, sortChannelGroups } from "../../../lib/service.ts";
 import { genreByLv1 } from "../../../lib/genre.ts";
 import Icon from "../../atoms/Icon.tsx";
 import IconButton from "../../atoms/IconButton.tsx";
@@ -58,9 +58,11 @@ function periodLabel(rule: KeywordRule): string | null {
 /** 条件チップ列。期間 → チャンネル → ジャンルの順、条件なしは案内文。 */
 function ConditionChips({ rule, channels }: Pick<Props, "rule" | "channels">) {
   const period = periodLabel(rule);
-  const selected = rule.channels
-    .map((id) => channels.find((channel) => channel.id === id))
-    .filter((channel): channel is ChannelGroup => channel !== undefined);
+  const selected = sortChannelGroups(
+    rule.channels
+      .map((id) => channels.find((channel) => channel.id === id))
+      .filter((channel): channel is ChannelGroup => channel !== undefined),
+  );
   // 同じキーに丸まる lv1 (12..15 → other) を重複表示しない。
   const genreKeys = [...new Set(rule.genres.map((lv1) => genreByLv1(lv1).key))];
 

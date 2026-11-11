@@ -22,10 +22,10 @@ function setup(
   override: Partial<Parameters<typeof LiveCommentSettingsTemplate>[0]> = {},
 ) {
   const props = {
-    // channel 昇順で並ぶので、index 基準のアサートが崩れないよう昇順で渡す。
+    // 選局番号順で並ぶので、index 基準のアサートが崩れないよう表示順で渡す。
     mappings: [
-      mappingOf({ id: "a", channel: "26" }),
-      mappingOf({ id: "b", channel: "27", enabled: false }),
+      mappingOf({ id: "a", channel: "27" }),
+      mappingOf({ id: "b", channel: "26", enabled: false }),
     ],
     channels: sampleChannelGroups,
     regions: [{ id: "kanto", label: "関東" }],
@@ -56,19 +56,48 @@ describe("LiveCommentSettings template", () => {
     expect(screen.getByText("Eテレ")).toBeTruthy();
   });
 
-  it("channel の昇順で表示する", () => {
+  it("チャンネルの選局順で表示する", () => {
     setup({
       mappings: [
-        mappingOf({ id: "a", channel: "27" }), // NHK総合
-        mappingOf({ id: "b", channel: "24" }), // テレビ朝日
+        mappingOf({ id: "a", channel: "24" }), // テレビ朝日
+        mappingOf({ id: "b", channel: "27" }), // NHK総合
         mappingOf({ id: "c", channel: "26" }), // Eテレ
       ],
     });
-    // 24 → 26 → 27 の順に並ぶので、テレビ朝日 が NHK総合 より前に来る。
-    const asahi = screen.getByText("テレビ朝日");
+    // 選局番号 1 → 2 → 5 の順に並ぶので、NHK総合 が テレビ朝日 より前に来る。
     const nhk = screen.getByText("NHK総合");
+    const asahi = screen.getByText("テレビ朝日");
     expect(
-      asahi.compareDocumentPosition(nhk) & Node.DOCUMENT_POSITION_FOLLOWING,
+      nhk.compareDocumentPosition(asahi) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("channels の渡された順に依らず選局順で表示する", () => {
+    setup({
+      channels: [...sampleChannelGroups].reverse(),
+      mappings: [
+        mappingOf({ id: "a", channel: "24" }), // テレビ朝日
+        mappingOf({ id: "b", channel: "27" }), // NHK総合
+      ],
+    });
+    const nhk = screen.getByText("NHK総合");
+    const asahi = screen.getByText("テレビ朝日");
+    expect(
+      nhk.compareDocumentPosition(asahi) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("対応するチャンネルが無い割り当ては末尾に表示する", () => {
+    setup({
+      mappings: [
+        mappingOf({ id: "a", channel: "zzz" }),
+        mappingOf({ id: "b", channel: "24" }),
+      ],
+    });
+    const known = screen.getByText("テレビ朝日");
+    const unknown = screen.getByText("zzz");
+    expect(
+      known.compareDocumentPosition(unknown) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 

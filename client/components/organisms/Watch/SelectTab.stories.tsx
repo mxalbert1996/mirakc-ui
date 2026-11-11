@@ -1,9 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import SelectTab, { type ChannelEntry } from "./SelectTab.tsx";
 import { samplePrograms, sampleServices } from "../../../lib/fixtures.ts";
+import { sortServices } from "../../../lib/service.ts";
 
 // 各サービスの番組 (id = service.id * 10 + i) から放送中 (i=1) / 次 (i=2) を組む。
-const channels: ChannelEntry[] = sampleServices
+const channels: ChannelEntry[] = sortServices(sampleServices)
   .filter((service) => service.channel.type === "GR")
   .map((service) => ({
     service,
