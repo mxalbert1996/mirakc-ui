@@ -383,6 +383,7 @@
   --z-index-dropdown: 80; /* 日付ピッカー等のポップアウト */
 
   /* -- 番組表グリッド内の局所レイヤー -- */
+  --z-index-grid-column-guide: 2; /* 番組表 列ガイド (セルより上 / ホバーより下) */
   --z-index-grid-cell-hover: 3; /* 番組セル ホバー時の浮き上がり */
   --z-index-grid-now-line: 6; /* 現在時刻ライン */
   --z-index-grid-now-chip: 22; /* 現在時刻チップ */

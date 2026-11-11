@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import type { components } from "../../../lib/api/schema.d.ts";
 import type { GenreKey } from "../../../lib/genre.ts";
 import { genreOf } from "../../../lib/genre.ts";
 import { formatH, formatHm } from "../../../lib/datetime.ts";
+import { serviceLogoUrl } from "../../../lib/service.ts";
 import { defaultWatchSearch } from "../../../lib/watch-search.ts";
 import ChannelBadge from "../../atoms/ChannelBadge.tsx";
 import ProgramItem from "../../molecules/Program/Item.tsx";
@@ -53,6 +55,34 @@ const GENRE_CLASS: Record<GenreKey, string> = {
 /** 時刻列の幅 (rem)。 */
 const TIME_COL = 5.6;
 
+/**
+ * サービス見出しの ch ロゴ。Mirakurun のロゴ画像は透明部分を持たず、白や
+ * ブランド色の背景が絵柄ごと入っているため、下地も余白も足さず絵柄をそのまま
+ * 見せる。`hasLogoData` は古いことがある (取得失敗) ので、読み込みに失敗したら
+ * 画像ごと消して番号 + 局名だけの見出しに戻す (見出しの高さは固定)。
+ */
+function ServiceLogo(
+  { service }: { service: components["schemas"]["MirakurunService"] },
+) {
+  const [failed, setFailed] = useState(false);
+  const url = serviceLogoUrl(service);
+  if (!url || failed) {
+    return null;
+  }
+  return (
+    <span className={styles.serviceLogo}>
+      <img
+        className={styles.serviceLogoImage}
+        src={url}
+        alt={service.name}
+        loading="lazy"
+        decoding="async"
+        onError={() => setFailed(true)}
+      />
+    </span>
+  );
+}
+
 export default function ProgramTable(props: Props) {
   const fromMs = props.displayFromMs;
   const toMs = props.displayToMs;
@@ -99,9 +129,25 @@ export default function ProgramTable(props: Props) {
             className={styles.serviceHeader}
             style={{ gridColumn: `${index + 2} / ${index + 3}` }}
           >
-            <ChannelBadge service={service} size="sm" />
-            <span className={styles.serviceHeaderName}>{service.name}</span>
+            <ServiceLogo service={service} />
+            <span className={styles.serviceHeaderLine}>
+              <ChannelBadge service={service} size="md" />
+              <span className={styles.serviceHeaderName}>{service.name}</span>
+            </span>
           </Link>
+        ))}
+
+        {services.map((service, index) => (
+          <div
+            key={`guide-${service.id}`}
+            className={styles.columnGuide}
+            style={{
+              left: `calc(${TIME_COL}rem + ${
+                index + 1
+              } * var(--service-col) - 1px)`,
+            }}
+            aria-hidden="true"
+          />
         ))}
 
         {[...Array(hourCount)].map((_, hour) => {
