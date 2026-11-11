@@ -3,7 +3,7 @@ import type { components } from "../lib/api/schema.d.ts";
 import { $api } from "../lib/api/client.ts";
 import { useLiveComments } from "../hooks/use-live-comments.ts";
 import { useNow } from "../hooks/use-now.ts";
-import type { ChannelType } from "../lib/service.ts";
+import { type ChannelType, sortServices } from "../lib/service.ts";
 import { t } from "../locales/i18n.ts";
 import LoadingTemplate from "../components/templates/Loading.tsx";
 import WatchTemplate from "../components/templates/Watch.tsx";
@@ -86,7 +86,7 @@ export default function Watch(props: Props) {
   const [channelType, setChannelType] = useState<ChannelType>("GR");
   const [tab, setTab] = useState<TabId>("select");
 
-  const allServices = services.data ?? [];
+  const allServices = sortServices(services.data ?? []);
   const allPrograms = programs.data ?? [];
 
   const selectedService = props.serviceId !== undefined

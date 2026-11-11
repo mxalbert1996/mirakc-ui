@@ -1,6 +1,10 @@
 import type { ReactNode } from "react";
 import type { components } from "../../lib/api/schema.d.ts";
-import { type ChannelType, channelTypeLabel } from "../../lib/service.ts";
+import {
+  type ChannelType,
+  channelTypeLabel,
+  sortServices,
+} from "../../lib/service.ts";
 import { startOfHourEpochMs } from "../../lib/datetime.ts";
 import { useHotkey } from "../../hooks/use-hotkey.ts";
 import { t } from "../../locales/i18n.ts";
@@ -69,7 +73,7 @@ export default function Program(props: Props) {
   const displayFromMs = startOfHourEpochMs(props.targetDate.epochMilliseconds);
   const displayToMs = displayFromMs + 24 * 60 * 60 * 1000;
 
-  const filteredServices = props.services.filter(
+  const filteredServices = sortServices(props.services).filter(
     (service) => service.channel.type === channelType,
   );
 

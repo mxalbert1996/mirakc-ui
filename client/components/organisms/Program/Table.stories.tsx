@@ -11,6 +11,7 @@ import {
   sampleSchedules,
   sampleServices,
 } from "../../../lib/fixtures.ts";
+import { sortServices } from "../../../lib/service.ts";
 
 // 現在の正時の 1 時間前を起点に 6 時間分の表示窓。
 const fromMs = startOfHourEpochMs(nowEpochMs()) - 60 * 60 * 1000;
@@ -31,7 +32,7 @@ const meta = {
     ),
   ],
   args: {
-    services: sampleServices,
+    services: sortServices(sampleServices),
     programs: samplePrograms,
     recordingSchedules: sampleSchedules,
     displayFromMs: fromMs,

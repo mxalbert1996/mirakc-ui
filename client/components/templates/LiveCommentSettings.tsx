@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { LiveCommentMapping } from "../../lib/api/live-comment-settings.ts";
-import type { ChannelGroup } from "../../lib/service.ts";
+import { type ChannelGroup, sortChannelGroups } from "../../lib/service.ts";
 import Icon from "../atoms/Icon.tsx";
 import PageHeader from "../organisms/PageHeader.tsx";
 import MappingCard from "../organisms/LiveComment/MappingCard.tsx";
@@ -66,11 +66,29 @@ export default function LiveCommentSettings(props: Props) {
 
   const enabledCount = props.mappings.filter((m) => m.enabled).length;
 
-  // 表示は channel の昇順。数値混じり ("9" < "16") と BS ("BS15_0") を素直に
-  // 並べるため numeric 比較を使う。
-  const sorted = [...props.mappings].sort((a, b) =>
-    a.channel.localeCompare(b.channel, undefined, { numeric: true })
+  // 表示はチャンネルの選局順 (GR はリモコン番号、BS / CS は serviceId)。対応
+  // する ChannelGroup を持たない割り当ては末尾へ回し、channel id の昇順で安定
+  // させる。
+  const channelOrder = new Map(
+    sortChannelGroups(props.channels).map((channel, index) => [
+      channel.id,
+      index,
+    ]),
   );
+  const sorted = [...props.mappings].sort((a, b) => {
+    const ai = channelOrder.get(a.channel);
+    const bi = channelOrder.get(b.channel);
+    if (ai !== undefined && bi !== undefined) {
+      return ai - bi;
+    }
+    if (ai !== undefined) {
+      return -1;
+    }
+    if (bi !== undefined) {
+      return 1;
+    }
+    return a.channel.localeCompare(b.channel, undefined, { numeric: true });
+  });
 
   return (
     <div className="app-root">

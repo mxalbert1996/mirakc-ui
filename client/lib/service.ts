@@ -52,14 +52,18 @@ export function buildChannelGroups(
       service,
     ]),
   );
-  return channels.map((channel) => ({
-    id: channel.channel,
-    type: channel.type,
-    name: channel.name,
-    services: channel.services
-      .map((s) => byKey.get(`${s.networkId}:${s.serviceId}`))
-      .filter((service): service is Service => service !== undefined),
-  }));
+  return channels
+    .map((channel) => ({
+      id: channel.channel,
+      type: channel.type,
+      name: channel.name,
+      services: sortServices(
+        channel.services
+          .map((s) => byKey.get(`${s.networkId}:${s.serviceId}`))
+          .filter((service): service is Service => service !== undefined),
+      ),
+    }))
+    .sort(compareChannelGroups);
 }
 
 /**
@@ -84,6 +88,57 @@ export function channelTypeLabel(id: ChannelType): string {
  */
 export function serviceNumber(service: Service): number {
   return service.remoteControlKeyId || service.serviceId;
+}
+
+/**
+ * サービスの表示順比較。選局番号 (serviceNumber) の昇順。GR はリモコン番号、
+ * BS / CS / SKY は serviceId が効く。同じ番号のサービスは serviceId /
+ * networkId で安定させる。
+ */
+function compareServices(a: Service, b: Service): number {
+  return serviceNumber(a) - serviceNumber(b) ||
+    a.serviceId - b.serviceId ||
+    a.networkId - b.networkId;
+}
+
+/** サービス一覧を表示順 (compareServices) に並べた新しい配列を返す。 */
+export function sortServices(services: Service[]): Service[] {
+  return [...services].sort(compareServices);
+}
+
+/** group の表示順の基準になるサービス (配下で最も選局番号が小さいもの)。 */
+function headService(group: ChannelGroup): Service | undefined {
+  let head: Service | undefined;
+  for (const service of group.services) {
+    if (head === undefined || compareServices(service, head) < 0) {
+      head = service;
+    }
+  }
+  return head;
+}
+
+/**
+ * チャンネル (group) の表示順比較。配下の先頭サービス (表示順) で並べる。
+ * サービスを持たない group は末尾へ回し、channel id で安定させる。
+ */
+function compareChannelGroups(a: ChannelGroup, b: ChannelGroup): number {
+  const aHead = headService(a);
+  const bHead = headService(b);
+  if (aHead !== undefined && bHead !== undefined) {
+    return compareServices(aHead, bHead);
+  }
+  if (aHead !== undefined) {
+    return -1;
+  }
+  if (bHead !== undefined) {
+    return 1;
+  }
+  return a.id.localeCompare(b.id, undefined, { numeric: true });
+}
+
+/** チャンネル一覧を表示順 (compareChannelGroups) に並べた新しい配列を返す。 */
+export function sortChannelGroups(groups: ChannelGroup[]): ChannelGroup[] {
+  return [...groups].sort(compareChannelGroups);
 }
 
 /**
