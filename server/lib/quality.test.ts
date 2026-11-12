@@ -7,7 +7,7 @@ import {
 } from "./quality.ts";
 
 Deno.test("qualities: 全プリセットを昇順に列挙する", () => {
-  assertEquals(qualities, ["480p", "720p", "1024p"]);
+  assertEquals(qualities, ["480p", "720p", "1080p"]);
 });
 
 Deno.test("isQuality: 既知の値だけ true", () => {
@@ -24,7 +24,7 @@ Deno.test("isQuality: 既知の値だけ true", () => {
 Deno.test("normalizeQuality: 既知の値はそのまま返す", () => {
   assertEquals(normalizeQuality("480p"), "480p");
   assertEquals(normalizeQuality("720p"), "720p");
-  assertEquals(normalizeQuality("1024p"), "1024p");
+  assertEquals(normalizeQuality("1080p"), "1080p");
 });
 
 Deno.test("normalizeQuality: 未知/空/null は defaultQuality にフォールバック", () => {

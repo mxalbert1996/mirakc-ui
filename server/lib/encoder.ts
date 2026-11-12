@@ -16,7 +16,7 @@ export const qualitySettings: Record<
 > = {
   "480p": { scale: "-2:480", bitrate: "1000k" },
   "720p": { scale: "-2:720", bitrate: "2000k" },
-  "1024p": { scale: "-2:1024", bitrate: "3500k" },
+  "1080p": { scale: "-2:1080", bitrate: "4500k" },
 };
 
 export function buildVideoEncoderArgs(
