@@ -4,6 +4,7 @@ import { $api } from "../lib/api/client.ts";
 import { useLiveComments } from "../hooks/use-live-comments.ts";
 import { useNow } from "../hooks/use-now.ts";
 import { type ChannelType, sortServices } from "../lib/service.ts";
+import { shouldRequestHevc } from "../lib/hevc-preference.ts";
 import { t } from "../locales/i18n.ts";
 import LoadingTemplate from "../components/templates/Loading.tsx";
 import WatchTemplate from "../components/templates/Watch.tsx";
@@ -116,9 +117,12 @@ export default function Watch(props: Props) {
 
   // A 方式 (#11): mirakc-ui 内部の transcode API を叩く。audioTrack / quality は
   // URL クエリでサーバへ渡され、値変化のたびに streamUrl が変わって Player の
-  // effect が再 init する。
+  // effect が再 init する。codec=hevc は HEVC を再生できる端末だけが付ける
+  // (サーバ側で必ず probe し、失敗すれば H.264 へ落ちる)。
   const streamUrl = selectedService
-    ? `/api/transcode/services/${selectedService.id}?audioTrack=${props.audioTrackIndex}&quality=${props.quality}`
+    ? `/api/transcode/services/${selectedService.id}?audioTrack=${props.audioTrackIndex}&quality=${props.quality}${
+      shouldRequestHevc() ? "&codec=hevc" : ""
+    }`
     : undefined;
 
   const audios = currentProgram?.audios ??

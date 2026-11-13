@@ -33,6 +33,14 @@ get:
           - 1080p
         default: 1080p
     - in: query
+      name: codec
+      required: false
+      description: hevc を指定すると、HEVC を再生できる端末向けに HEVC を優先する。非対応や失敗時は H.264 へ落とす。
+      schema:
+        type: string
+        enum:
+          - hevc
+    - in: query
       name: raw
       required: false
       description: 1 を指定すると再エンコードを抑えた raw モードで配信する。
@@ -49,14 +57,14 @@ get:
             type: string
             format: binary
     503:
-      description: 利用可能な H.264 エンコーダーが無い場合。
+      description: 利用可能な映像エンコーダーが無い場合。
       content:
         text/plain:
           schema:
             type: string
           examples:
             noEncoder:
-              value: No usable H.264 encoder found
+              value: No usable video encoder found
     default:
       description: mirakc の上流ストリーム取得に失敗した場合。mirakc の応答ステータスをそのまま返す。
       content:

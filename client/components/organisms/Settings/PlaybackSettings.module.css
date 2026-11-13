@@ -1,0 +1,88 @@
+/* ---- セクション ---- */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+  margin-top: 3.2rem;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: 0.02rem;
+}
+
+/* ---- HEVC トグル ---- */
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 1.6rem;
+  padding: 0 2rem;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 1.2rem;
+  padding: 1.6rem 0;
+}
+
+.rowIcon {
+  flex: 0 0 auto;
+  width: 3.2rem;
+  height: 3.2rem;
+  border-radius: 0.8rem;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-accent);
+}
+
+.rowText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.rowName {
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.rowDescription {
+  font-size: 1.1rem;
+  color: var(--color-text-dim);
+  font-weight: 500;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.rowDescriptionMuted {
+  color: var(--color-text-faint);
+}
+
+.state {
+  flex: 0 0 auto;
+  font-size: 1.1rem;
+  font-weight: 600;
+  letter-spacing: 0.04rem;
+  color: var(--color-text-faint);
+
+  &.stateOn {
+    color: var(--color-accent);
+  }
+}
+
+/* ---- mobile ---- */
+@container style(--is-mobile: true) {
+  .card {
+    padding: 0 1.6rem;
+  }
+
+  .state {
+    display: none;
+  }
+}

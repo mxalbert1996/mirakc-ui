@@ -1,14 +1,15 @@
 /**
- * H.264 エンコーダの検出とトランスコード用の ffmpeg 引数生成。
+ * トランスコード用エンコーダの選択と ffmpeg 引数生成。
  *
  * `ffmpeg -encoders` の文字列一致はデバイス有無を判定できず誤検出するため
  * (Debian の ffmpeg pkg は h264_v4l2m2m をビルド済みだが /dev/video* が無いと
- * 使えない)、実エンコードテスト (probe) で検証する。
+ * 使えない)、実エンコードテスト (probe) で検証する。AV1 のハードウェア
+ * エンコーダは MPEG-TS に多重化できないため候補に含めない。
  */
 
 import type { Quality } from "./quality.ts";
 
-export type EncoderName = "h264_v4l2m2m" | "libx264";
+export type EncoderName = "hevc_v4l2m2m" | "h264_v4l2m2m" | "libx264";
 
 export const qualitySettings: Record<
   Quality,
@@ -23,30 +24,59 @@ export function buildVideoEncoderArgs(
   encoder: EncoderName,
   bitrate: string,
 ): string[] {
-  if (encoder === "h264_v4l2m2m") {
+  if (encoder === "libx264") {
     return [
       "-c:v",
-      "h264_v4l2m2m",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      "-tune",
+      "zerolatency",
       "-b:v",
       bitrate,
       "-g",
       "15",
+      "-sc_threshold",
+      "0",
     ];
   }
   return [
     "-c:v",
-    "libx264",
-    "-preset",
-    "ultrafast",
-    "-tune",
-    "zerolatency",
+    encoder,
     "-b:v",
     bitrate,
     "-g",
     "15",
-    "-sc_threshold",
-    "0",
   ];
+}
+
+/**
+ * V4L2 の mem2mem エンコーダは yuv420p 以外を受け付けないため format
+ * フィルターを付ける。libx264 は入力の pix_fmt をそのまま扱えるので付けない。
+ *
+ * HW エンコーダは SPS の VUI を書かず SAR が消えるが、docker/ffmpeg-patches の
+ * パッチが入力フレームの SAR をそのまま書くので、ここで格子を固定する必要は
+ * ない (1920x1080 のソースも縮小せず 1:1 のまま出る)。
+ */
+export function buildVideoFilter(
+  encoder: EncoderName,
+  quality: Quality,
+): string {
+  const { scale } = qualitySettings[quality];
+  const deinterlace = "yadif=mode=0:parity=-1:deint=1";
+  return encoder === "libx264"
+    ? `${deinterlace},scale=${scale}`
+    : `${deinterlace},scale=${scale},format=yuv420p`;
+}
+
+/**
+ * クライアントの希望を反映した試行順。HEVC は対応端末から要求されたときだけ
+ * 先頭に置き、失敗時は H.264 (HW → ソフトウェア) へ落とす。
+ */
+export function encoderChain(preferHevc: boolean): EncoderName[] {
+  return preferHevc
+    ? ["hevc_v4l2m2m", "h264_v4l2m2m", "libx264"]
+    : ["h264_v4l2m2m", "libx264"];
 }
 
 /** 子プロセスの stderr を改行単位で prefix 付きログに流す。 */
@@ -81,12 +111,24 @@ export function pipeStderr(
   });
 }
 
-let cachedEncoder: EncoderName | null = null;
-let detectingPromise: Promise<EncoderName | null> | null = null;
+/**
+ * probe 用の入力。ISDB で最も多い 1440x1080 を使う。SAR 1:1 のテストパターン
+ * なので、SAR を書く ffmpeg パッチの有無はここでは判定できない。
+ */
+const PROBE_INPUT = "testsrc=size=1440x1080:rate=30:duration=0.34";
+const PROBE_TIMEOUT_MS = 5000;
 
-async function probeEncoder(encoder: EncoderName): Promise<boolean> {
+/**
+ * 実際に数フレームをエンコードして使えるか確かめる。配信と同じフィルターと
+ * エンコーダ引数を通すので、解像度制約やデバイス占有 (EBUSY) もここで分かる。
+ * 所要時間は 1080p で HW 約 80ms / x264 約 40ms。
+ */
+export async function probeVideoEncoder(
+  encoder: EncoderName,
+  quality: Quality,
+): Promise<boolean> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   try {
     const child = new Deno.Command("ffmpeg", {
       args: [
@@ -96,8 +138,10 @@ async function probeEncoder(encoder: EncoderName): Promise<boolean> {
         "-f",
         "lavfi",
         "-i",
-        "color=size=320x240:rate=10:duration=1",
-        ...buildVideoEncoderArgs(encoder, "500k"),
+        PROBE_INPUT,
+        "-vf",
+        buildVideoFilter(encoder, quality),
+        ...buildVideoEncoderArgs(encoder, qualitySettings[quality].bitrate),
         "-frames:v",
         "10",
         "-f",
@@ -116,34 +160,5 @@ async function probeEncoder(encoder: EncoderName): Promise<boolean> {
     return false;
   } finally {
     clearTimeout(timer);
-  }
-}
-
-/**
- * 使用可能な H.264 エンコーダを実 probe で検出する。h264_v4l2m2m → libx264 の
- * 順に試し、成功した方をキャッシュする。両方失敗時は null (呼び出し側で 503)。
- * null はキャッシュしない (ffmpeg 再インストール等の復旧余地を残す)。
- * 並行リクエストのレースは detectingPromise で直列化する。
- */
-export async function detectVideoEncoder(): Promise<EncoderName | null> {
-  if (cachedEncoder !== null) {
-    return cachedEncoder;
-  }
-  if (detectingPromise) {
-    return detectingPromise;
-  }
-  detectingPromise = (async () => {
-    for (const enc of ["h264_v4l2m2m", "libx264"] as const) {
-      if (await probeEncoder(enc)) {
-        cachedEncoder = enc;
-        return enc;
-      }
-    }
-    return null;
-  })();
-  try {
-    return await detectingPromise;
-  } finally {
-    detectingPromise = null;
   }
 }

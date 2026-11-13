@@ -1,71 +1,51 @@
 import { Hono } from "hono";
 import {
   buildVideoEncoderArgs,
-  detectVideoEncoder,
+  buildVideoFilter,
+  encoderChain,
+  type EncoderName,
   pipeStderr,
+  probeVideoEncoder,
   qualitySettings,
 } from "../lib/encoder.ts";
-import { normalizeQuality } from "../lib/quality.ts";
+import { normalizeQuality, type Quality } from "../lib/quality.ts";
 import { mirakcApiUrlOf } from "../lib/mirakc.ts";
 
 /**
  * ライブ視聴のトランスコード配信 (A 方式, #11)。mirakc のサービスストリーム →
- * tsreadex (字幕・音声整形) → ffmpeg (H.264 / AAC 再エンコード) → MPEG-TS を
- * チャンク応答する。`app.route("/api/transcode", transcode)` でマウントする。
+ * tsreadex (字幕・音声整形) → ffmpeg (再エンコード) → MPEG-TS をチャンク応答
+ * する。`app.route("/api/transcode", transcode)` でマウントする。
  *
- * 旧構成の routes/api/transcode/services/[id].ts と等価。Fresh の ctx 依存
- * (params / searchParams / req.signal) を Hono の Context に置き換えてある。
+ * エンコーダは probe で選ぶ。`codec=hevc` を付けたクライアント (HEVC を再生
+ * できると自己申告した端末) にだけ HEVC を先頭に置き、失敗時は H.264 の
+ * HW → ソフトウェアへ落とす。probe 成功後にデバイスを奪われる競合に備えて、
+ * 実際に最初のチャンクが出るまでを試行とみなし、失敗したら次の候補へ進む。
  */
 export const transcode = new Hono();
 
-transcode.get("/services/:id", async (c) => {
-  const mirakcUrl = Deno.env.get("MIRAKC_URL") ?? "";
-  const mirakcApiUrl = mirakcUrl === "" ? "" : mirakcApiUrlOf(mirakcUrl);
-  const serviceId = c.req.param("id");
+/** ffmpeg が起動して最初の出力を返すまでの上限。 */
+const FIRST_CHUNK_TIMEOUT_MS = 15000;
 
-  const url = new URL(c.req.url);
-  const audioTrackParam = url.searchParams.get("audioTrack");
-  const audioTrackIndex =
-    audioTrackParam !== null && Number.isInteger(Number(audioTrackParam))
-      ? Math.max(0, Number(audioTrackParam))
-      : 0;
+type Attempt = {
+  ffmpeg: Deno.ChildProcess;
+  tsreadex: Deno.ChildProcess | null;
+  reader: ReadableStreamDefaultReader<Uint8Array>;
+  first: Uint8Array;
+  stop: (reason: string) => void;
+};
 
-  const quality = normalizeQuality(url.searchParams.get("quality"));
-  const { scale, bitrate } = qualitySettings[quality];
+type StartOptions = {
+  encoder: EncoderName;
+  quality: Quality;
+  audioTrackIndex: number;
+  rawMode: boolean;
+  streamUrl: string;
+  serviceId: string;
+  signal: AbortSignal;
+};
 
-  const rawMode = url.searchParams.get("raw") === "1";
-
-  const encoder = await detectVideoEncoder();
-  if (encoder === null) {
-    return new Response("No usable H.264 encoder found", {
-      status: 503,
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-    });
-  }
-
-  // h264_v4l2m2m は yuv420p のみ受け付けるため format フィルターを付加。
-  const vf = encoder === "h264_v4l2m2m"
-    ? `yadif=mode=0:parity=-1:deint=1,scale=${scale},format=yuv420p`
-    : `yadif=mode=0:parity=-1:deint=1,scale=${scale}`;
-
-  const streamUrl = new URL(
-    `${mirakcApiUrl}/services/${serviceId}/stream?decode=1`,
-  );
-
-  const mirakcResponse = await fetch(streamUrl.toString());
-
-  if (!mirakcResponse.ok || !mirakcResponse.body) {
-    return new Response("Failed to fetch stream from mirakc", {
-      status: mirakcResponse.status,
-    });
-  }
-
-  console.error(
-    `[transcode] serviceId=${serviceId} encoder=${encoder} raw=${rawMode} quality=${quality} audioTrack=${audioTrackIndex}`,
-  );
-
-  // FFmpeg: 映像を H.264 に、音声を AAC にトランスコード。
-  const ffmpegChild = new Deno.Command("ffmpeg", {
+function spawnFfmpeg(opts: StartOptions): Deno.ChildProcess {
+  const child = new Deno.Command("ffmpeg", {
     args: [
       "-fflags",
       "nobuffer",
@@ -76,15 +56,18 @@ transcode.get("/services/:id", async (c) => {
       "-map",
       "0:v:0",
       "-map",
-      `0:a:${audioTrackIndex}?`,
+      `0:a:${opts.audioTrackIndex}?`,
       "-map",
       "0:d?",
       "-ignore_unknown",
       "-max_delay",
       "250000",
       "-vf",
-      vf,
-      ...buildVideoEncoderArgs(encoder, bitrate),
+      buildVideoFilter(opts.encoder, opts.quality),
+      ...buildVideoEncoderArgs(
+        opts.encoder,
+        qualitySettings[opts.quality].bitrate,
+      ),
       "-c:a",
       "aac",
       "-b:a",
@@ -99,117 +82,164 @@ transcode.get("/services/:id", async (c) => {
     stdout: "piped",
     stderr: "piped",
   }).spawn();
-  pipeStderr(ffmpegChild.stderr, "[ffmpeg]");
+  pipeStderr(child.stderr, "[ffmpeg]");
+  return child;
+}
 
-  // NOTE: tsreadex 撤去が確定した場合は以下を削除する。
-  //   - Dockerfile の tsreadex-build ステージ
-  //   - Dockerfile の COPY --from=tsreadex-build および chmod
-  //   - 本ファイルの tsreadexChild spawn と pipeStderr([tsreadex])
-  //   - 本ファイルの rawMode 分岐とクエリ読取 (常に raw 相当の経路に)
-  //   - ffmpeg 引数は変更不要 (-c:d copy -map 0:d? -ignore_unknown で
-  //     字幕 PES を保持)
-  let tsreadexChild: Deno.ChildProcess | null = null;
-  if (!rawMode) {
-    // tsreadex: ARIB 字幕周りを整形しつつストリームを安定化。
-    tsreadexChild = new Deno.Command("tsreadex", {
-      args: [
-        "-n",
-        "-1",
-        "-a",
-        "13",
-        "-b",
-        "5",
-        "-c",
-        "5",
-        "-u",
-        "1",
-        "-d",
-        "13",
-        "-",
-      ],
-      stdin: "piped",
-      stdout: "piped",
-      stderr: "piped",
-    }).spawn();
-    pipeStderr(tsreadexChild.stderr, "[tsreadex]");
+/** ARIB 字幕周りを整形しつつストリームを安定化する (raw モードでは使わない)。 */
+function spawnTsreadex(): Deno.ChildProcess {
+  const child = new Deno.Command("tsreadex", {
+    args: [
+      "-n",
+      "-1",
+      "-a",
+      "13",
+      "-b",
+      "5",
+      "-c",
+      "5",
+      "-u",
+      "1",
+      "-d",
+      "13",
+      "-",
+    ],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+  }).spawn();
+  pipeStderr(child.stderr, "[tsreadex]");
+  return child;
+}
+
+/** 上流 (mirakc) の失敗。エンコーダを替えても結果は変わらない。 */
+class UpstreamError extends Error {
+  constructor(readonly status: number) {
+    super("Failed to fetch stream from mirakc");
+  }
+}
+
+/**
+ * mirakc から取り、tsreadex・ffmpeg を繋いで最初のチャンクまで待つ。
+ * 最初のチャンクが出なければ (ffmpeg 即終了 / デバイス占有 / タイムアウト)
+ * 後始末して null を返す。呼び出し側は次の候補へ進む。
+ */
+async function startAttempt(opts: StartOptions): Promise<Attempt | null> {
+  const upstream = await fetch(opts.streamUrl, { signal: opts.signal });
+  if (!upstream.ok || !upstream.body) {
+    console.error(
+      `[transcode] mirakc stream failed serviceId=${opts.serviceId} status=${upstream.status}`,
+    );
+    throw new UpstreamError(upstream.ok ? 502 : upstream.status);
   }
 
-  // client 切断・子プロセス異常終了・上流切断のいずれでも tsreadex と ffmpeg
-  // を確実に SIGTERM → SIGKILL で落とすためのヘルパ。冪等。
-  let cleanedUp = false;
-  const cleanup = (reason: string) => {
-    if (cleanedUp) {
+  const tsreadex = opts.rawMode ? null : spawnTsreadex();
+  let ffmpeg: Deno.ChildProcess;
+  try {
+    ffmpeg = spawnFfmpeg(opts);
+  } catch (e) {
+    try {
+      tsreadex?.kill("SIGKILL");
+    } catch {
+      // already exited
+    }
+    upstream.body.cancel().catch(() => {});
+    throw e;
+  }
+
+  let stopped = false;
+  const stop = (reason: string) => {
+    if (stopped) {
       return;
     }
-    cleanedUp = true;
+    stopped = true;
     console.error(
-      `[transcode] cleanup serviceId=${serviceId} reason=${reason}`,
+      `[transcode] stop serviceId=${opts.serviceId} encoder=${opts.encoder} reason=${reason}`,
     );
-    const term = (child: Deno.ChildProcess | null) => {
-      if (!child) {
-        return;
-      }
+    for (const child of [tsreadex, ffmpeg]) {
       try {
-        child.kill("SIGTERM");
+        child?.kill("SIGTERM");
       } catch {
         // already exited
       }
-    };
-    term(tsreadexChild);
-    term(ffmpegChild);
+    }
     setTimeout(() => {
-      const force = (child: Deno.ChildProcess | null) => {
-        if (!child) {
-          return;
-        }
+      for (const child of [tsreadex, ffmpeg]) {
         try {
-          child.kill("SIGKILL");
+          child?.kill("SIGKILL");
         } catch {
           // already exited
         }
-      };
-      force(tsreadexChild);
-      force(ffmpegChild);
+      }
     }, 3000);
+    upstream.body?.cancel().catch(() => {});
   };
 
-  c.req.raw.signal.addEventListener(
-    "abort",
-    () => cleanup("client abort"),
-    { once: true },
-  );
-
-  ffmpegChild.status
-    .then((s) => cleanup(`ffmpeg exited code=${s.code}`))
-    .catch(() => {});
-  tsreadexChild?.status
-    .then((s) => cleanup(`tsreadex exited code=${s.code}`))
-    .catch(() => {});
-
-  if (rawMode) {
-    // raw モード: mirakc → ffmpeg → client (tsreadex バイパス)。
-    // 字幕 PES は ffmpeg の `-c:d copy -map 0:d?` で MPEG-TS に残り、
-    // クライアント側 aribb24.js が PES_PRIVATE_DATA_ARRIVED で拾う。
-    mirakcResponse.body.pipeTo(ffmpegChild.stdin).catch(() => {
-      cleanup("mirakc -> ffmpeg pipe ended");
+  if (opts.rawMode) {
+    upstream.body.pipeTo(ffmpeg.stdin).catch(() => {
+      stop("mirakc -> ffmpeg pipe ended");
     });
   } else {
-    mirakcResponse.body.pipeTo(tsreadexChild!.stdin).catch(() => {
-      cleanup("mirakc -> tsreadex pipe ended");
+    upstream.body.pipeTo(tsreadex!.stdin).catch(() => {
+      stop("mirakc -> tsreadex pipe ended");
     });
-    tsreadexChild!.stdout.pipeTo(ffmpegChild.stdin).catch(() => {
-      cleanup("tsreadex -> ffmpeg pipe ended");
+    tsreadex!.stdout.pipeTo(ffmpeg.stdin).catch(() => {
+      stop("tsreadex -> ffmpeg pipe ended");
     });
   }
 
-  // ffmpeg stdout を Response body に流す。client 側 reader が途中で cancel
-  // した場合にも UnderlyingSource.cancel で cleanup を走らせる。
-  const responseBody = new ReadableStream<Uint8Array>({
+  const reader = ffmpeg.stdout.getReader();
+  const first = await firstChunk(reader, ffmpeg, opts.signal);
+  if (first === null) {
+    stop("no output");
+    reader.cancel().catch(() => {});
+    return null;
+  }
+
+  return {
+    ffmpeg,
+    tsreadex,
+    reader,
+    first,
+    stop,
+  };
+}
+
+async function firstChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  ffmpeg: Deno.ChildProcess,
+  signal: AbortSignal,
+): Promise<Uint8Array | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), FIRST_CHUNK_TIMEOUT_MS);
+  });
+  const abort = new Promise<null>((resolve) => {
+    if (signal.aborted) {
+      resolve(null);
+      return;
+    }
+    signal.addEventListener("abort", () => resolve(null), { once: true });
+  });
+  try {
+    return await Promise.race([
+      reader.read().then((result) => (result.done ? null : result.value)),
+      ffmpeg.status.then(() => null),
+      timeout,
+      abort,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function responseBody(attempt: Attempt): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
     async start(controller) {
-      const reader = ffmpegChild.stdout.getReader();
+      controller.enqueue(attempt.first);
       try {
         while (true) {
-          const { done, value } = await reader.read();
+          const { done, value } = await attempt.reader.read();
           if (done) {
             controller.close();
             return;
@@ -217,25 +247,107 @@ transcode.get("/services/:id", async (c) => {
           controller.enqueue(value);
         }
       } catch (e) {
-        controller.error(e);
+        try {
+          controller.error(e);
+        } catch {
+          // 既に閉じている
+        }
       } finally {
         try {
-          reader.releaseLock();
+          attempt.reader.releaseLock();
         } catch {
           // already released
         }
       }
     },
     cancel() {
-      cleanup("response body cancel");
+      attempt.stop("response body cancel");
     },
   });
+}
 
-  return new Response(responseBody, {
-    status: 200,
-    headers: {
-      "Content-Type": "video/mp2t",
-      "Cache-Control": "no-cache",
-    },
+transcode.get("/services/:id", async (c) => {
+  const mirakcUrl = Deno.env.get("MIRAKC_URL") ?? "";
+  const mirakcApiUrl = mirakcUrl === "" ? "" : mirakcApiUrlOf(mirakcUrl);
+  const serviceId = c.req.param("id");
+
+  const url = new URL(c.req.url);
+  const audioTrackParam = url.searchParams.get("audioTrack");
+  const audioTrackIndex =
+    audioTrackParam !== null && Number.isInteger(Number(audioTrackParam))
+      ? Math.max(0, Number(audioTrackParam))
+      : 0;
+
+  const quality = normalizeQuality(url.searchParams.get("quality"));
+  const rawMode = url.searchParams.get("raw") === "1";
+  const preferHevc = url.searchParams.get("codec") === "hevc";
+
+  const streamUrl = new URL(
+    `${mirakcApiUrl}/services/${serviceId}/stream?decode=1`,
+  ).toString();
+
+  for (const encoder of encoderChain(preferHevc)) {
+    if (c.req.raw.signal.aborted) {
+      break;
+    }
+    if (!(await probeVideoEncoder(encoder, quality))) {
+      continue;
+    }
+    let attempt: Attempt | null = null;
+    try {
+      attempt = await startAttempt({
+        encoder,
+        quality,
+        audioTrackIndex,
+        rawMode,
+        streamUrl,
+        serviceId,
+        signal: c.req.raw.signal,
+      });
+    } catch (e) {
+      if (e instanceof UpstreamError) {
+        return new Response(e.message, {
+          status: e.status,
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
+      }
+      console.error(
+        `[transcode] attempt failed serviceId=${serviceId} encoder=${encoder}`,
+        e,
+      );
+    }
+    if (attempt === null) {
+      continue;
+    }
+
+    console.error(
+      `[transcode] serviceId=${serviceId} encoder=${encoder} codec=${
+        preferHevc ? "hevc" : "h264"
+      } raw=${rawMode} quality=${quality} audioTrack=${audioTrackIndex}`,
+    );
+    attempt.ffmpeg.status
+      .then((s) => attempt.stop(`ffmpeg exited code=${s.code}`))
+      .catch(() => {});
+    attempt.tsreadex?.status
+      .then((s) => attempt.stop(`tsreadex exited code=${s.code}`))
+      .catch(() => {});
+    c.req.raw.signal.addEventListener(
+      "abort",
+      () => attempt.stop("client abort"),
+      { once: true },
+    );
+
+    return new Response(responseBody(attempt), {
+      status: 200,
+      headers: {
+        "Content-Type": "video/mp2t",
+        "Cache-Control": "no-cache",
+      },
+    });
+  }
+
+  return new Response("No usable video encoder found", {
+    status: 503,
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
   });
 });

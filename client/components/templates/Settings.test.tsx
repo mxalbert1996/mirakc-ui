@@ -50,6 +50,14 @@ describe("Settings template", () => {
     expect(props.onOpenLiveComments).toHaveBeenCalledTimes(1);
   });
 
+  it("再生セクションに HEVC トグルを描画する", () => {
+    setup();
+    expect(screen.getByText(t("settings.playback.title"))).toBeTruthy();
+    expect(
+      screen.getByRole("switch", { name: t("settings.playback.hevc.label") }),
+    ).toBeTruthy();
+  });
+
   it("番組表へ戻るリンクで onBack が発火する", () => {
     const { props } = setup();
     fireEvent.click(screen.getByLabelText(t("settings.epg")));

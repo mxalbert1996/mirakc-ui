@@ -21,6 +21,9 @@ node_modules/
 # just（個人ローカルの上書き）
 .just/*.local.just
 
+# ローカル専用の実行環境 (ハードウェアエンコーダ対応の ffmpeg で動かす compose 等)
+.local/
+
 # design-sync (claude.ai/design 同期) の transient 成果物
 .design-sync/sb-reference/
 .design-sync/learnings/
