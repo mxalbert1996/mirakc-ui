@@ -1,5 +1,6 @@
 import Icon from "../atoms/Icon.tsx";
 import PageHeader from "../organisms/PageHeader.tsx";
+import PlaybackSettings from "../organisms/Settings/PlaybackSettings.tsx";
 import ColorSchemeToggle from "../../islands/ColorSchemeToggle.tsx";
 import { t } from "../../locales/i18n.ts";
 import styles from "./Settings.module.css";
@@ -22,8 +23,8 @@ type Props = {
 };
 
 /**
- * 設定ポータル。各設定画面へのナビゲーションカードを並べる。
- * 今後 /settings/notification (通知設定) のカードを追加していく想定。
+ * 設定ポータル。各設定画面へのナビゲーションカードを並べ、その下に
+ * ブラウザ単位の再生設定 (HEVC) を置く。
  */
 export default function Settings(props: Props) {
   return (
@@ -117,6 +118,8 @@ export default function Settings(props: Props) {
               </span>
             </button>
           </div>
+
+          <PlaybackSettings />
         </div>
       </main>
     </div>

@@ -44,7 +44,7 @@ ARG X264_VERSION=b35605ace3ddf7c1a5d67a2eb553f034aef41d55
 RUN <<EOF
     apt-get update
     apt-get install -y --no-install-recommends \
-        build-essential pkg-config curl ca-certificates xz-utils bzip2 nasm
+        build-essential pkg-config curl ca-certificates xz-utils bzip2 nasm patch
     rm -rf /var/lib/apt/lists/*
 EOF
 
@@ -66,18 +66,26 @@ EOF
 
 # server/routes/transcode.ts と server/lib/encoder.ts が使う機能を列挙する。
 # - 入力: mpegts (pipe:0) / MPEG-2, H.264, AAC (AAC-LATM) のデコード
-# - 映像: libx264 (ソフトウェア) / h264_v4l2m2m (ハードウェア) と yadif, scale, format
+# - 映像: libx264 (ソフトウェア) / h264_v4l2m2m (HW H.264) / hevc_v4l2m2m (HW HEVC)
+#   と yadif, scale, format。HW エンコーダは SPS の VUI を書かず SAR が消える
+#   ため、docker/ffmpeg-patches のパッチで h264_metadata / hevc_metadata を
+#   エンコーダ内部から掛け、入力フレームの SAR をそのまま書かせる
 # - 音声: aac エンコーダ
 # - 出力: mpegts (pipe:1)。`-c:d copy` のデータストリーム (ARIB 字幕) は
 #   mpegts のデータストリームとしてそのまま通す
-# - 起動時 probe: lavfi の color 入力と -f null 出力
+# - probe (リクエストごと): lavfi の testsrc 入力と -f null 出力
 # wrapped_avframe / pcm_s16le は lavfi と -f null に必須 (decoder と encoder の両方)。
+COPY docker/ffmpeg-patches /tmp/ffmpeg-patches
 RUN <<EOF
     set -eu
     curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
         -o /tmp/ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz"
     tar -xJf /tmp/ffmpeg.tar.xz -C /tmp
     cd "/tmp/ffmpeg-$FFMPEG_VERSION"
+    for p in /tmp/ffmpeg-patches/*.patch; do
+        echo "patches: $(basename "$p")"
+        patch -p1 --fuzz=0 -i "$p"
+    done
     ./configure \
         --disable-everything \
         --disable-doc \
@@ -93,7 +101,8 @@ RUN <<EOF
         --enable-swscale \
         --enable-swresample \
         --enable-decoder=mpeg2video,h264,aac,aac_latm,rawvideo,wrapped_avframe,pcm_s16le \
-        --enable-encoder=libx264,aac,h264_v4l2m2m,wrapped_avframe,pcm_s16le \
+        --enable-encoder=libx264,aac,h264_v4l2m2m,hevc_v4l2m2m,wrapped_avframe,pcm_s16le \
+        --enable-bsf=h264_metadata,hevc_metadata \
         --enable-parser=mpegvideo,h264,aac,aac_latm \
         --enable-demuxer=mpegts,data \
         --enable-muxer=mpegts,null \
