@@ -26,12 +26,26 @@ export const transcode = new Hono();
 /** ffmpeg が起動して最初の出力を返すまでの上限。 */
 const FIRST_CHUNK_TIMEOUT_MS = 15000;
 
+/** 停止処理の完了待ちの上限。SIGKILL しても回収されないプロセスで固まらないため。 */
+const STOP_WAIT_MS = 4000;
+
+/** `promise` が ms 以内に解決しなければ諦める (待ち続けてリクエストを止めない)。 */
+function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(() => resolve(), ms);
+  });
+  return Promise.race([promise.catch(() => {}), timeout]).finally(() =>
+    clearTimeout(timer)
+  );
+}
+
 type Attempt = {
   ffmpeg: Deno.ChildProcess;
   tsreadex: Deno.ChildProcess | null;
   reader: ReadableStreamDefaultReader<Uint8Array>;
   first: Uint8Array;
-  stop: (reason: string) => void;
+  stop: (reason: string) => Promise<void>;
 };
 
 type StartOptions = {
@@ -149,15 +163,24 @@ async function startAttempt(opts: StartOptions): Promise<Attempt | null> {
     throw e;
   }
 
-  let stopped = false;
-  const stop = (reason: string) => {
-    if (stopped) {
-      return;
+  let stopPromise: Promise<void> | null = null;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  /**
+   * 再入可能な停止処理。SIGTERM → 3 秒で SIGKILL。子プロセスが実際に終了する
+   * まで resolve しない — V4L2 のデバイスは ffmpeg の終了時に解放されるため、
+   * 次の試行の probe はこれを await してから行う。
+   */
+  const stop = (reason: string): Promise<void> => {
+    if (stopPromise !== null) {
+      return stopPromise;
     }
-    stopped = true;
     console.error(
       `[transcode] stop serviceId=${opts.serviceId} encoder=${opts.encoder} reason=${reason}`,
     );
+    // ffmpeg は stdout パイプが詰まると SIGTERM を無視して書き込みでブロックし
+    // 続け、SIGKILL まで V4L2 デバイスを握る。先に reader を閉じて EPIPE で
+    // 自発的に終了させる (実測 3 秒 → 約 120ms)。
+    reader?.cancel().catch(() => {});
     for (const child of [tsreadex, ffmpeg]) {
       try {
         child?.kill("SIGTERM");
@@ -165,7 +188,7 @@ async function startAttempt(opts: StartOptions): Promise<Attempt | null> {
         // already exited
       }
     }
-    setTimeout(() => {
+    const killTimer = setTimeout(() => {
       for (const child of [tsreadex, ffmpeg]) {
         try {
           child?.kill("SIGKILL");
@@ -175,8 +198,17 @@ async function startAttempt(opts: StartOptions): Promise<Attempt | null> {
       }
     }, 3000);
     upstream.body?.cancel().catch(() => {});
+    stopPromise = Promise.all([
+      tsreadex?.status.catch(() => {}),
+      ffmpeg.status.catch(() => {}),
+    ]).then(() => {
+      clearTimeout(killTimer);
+    });
+    return stopPromise;
   };
 
+  // pipeTo の catch ハンドラは stop を先に呼び得るので、reader はここで作る。
+  reader = ffmpeg.stdout.getReader();
   if (opts.rawMode) {
     upstream.body.pipeTo(ffmpeg.stdin).catch(() => {
       stop("mirakc -> ffmpeg pipe ended");
@@ -190,11 +222,17 @@ async function startAttempt(opts: StartOptions): Promise<Attempt | null> {
     });
   }
 
-  const reader = ffmpeg.stdout.getReader();
-  const first = await firstChunk(reader, ffmpeg, opts.signal);
+  let first: Uint8Array | null;
+  try {
+    first = await firstChunk(reader, ffmpeg, opts.signal);
+  } catch (e) {
+    // ここで落とすと status ハンドラが付かないまま ffmpeg がデバイスを握り続ける。
+    await withTimeout(stop("first chunk failed"), STOP_WAIT_MS);
+    throw e;
+  }
   if (first === null) {
-    stop("no output");
-    reader.cancel().catch(() => {});
+    // 子プロセスの終了 (= デバイス解放) を待ってから次の候補へ進む。
+    await withTimeout(stop("no output"), STOP_WAIT_MS);
     return null;
   }
 
@@ -263,7 +301,7 @@ function responseBody(attempt: Attempt): ReadableStream<Uint8Array> {
       }
     },
     cancel() {
-      attempt.stop("response body cancel");
+      return attempt.stop("response body cancel");
     },
   });
 }
@@ -290,11 +328,27 @@ transcode.get("/services/:id", async (c) => {
     `${mirakcApiUrl}/services/${serviceId}/stream?decode=1`,
   ).toString();
 
+  // AVE の h264_v4l2m2m と hevc_v4l2m2m は同じ /dev/video* を共有するので、
+  // EBUSY が出たら残りの v4l2m2m を試さず libx264 へ落とす。
+  let v4l2Busy = false;
   for (const encoder of encoderChain(preferHevc)) {
     if (c.req.raw.signal.aborted) {
       break;
     }
-    if (!(await probeVideoEncoder(encoder, quality, v4l2Cq))) {
+    if (v4l2Busy && encoder !== "libx264") {
+      continue;
+    }
+    const probe = await probeVideoEncoder(
+      encoder,
+      quality,
+      v4l2Cq,
+      c.req.raw.signal,
+    );
+    if (probe === "busy") {
+      v4l2Busy = true;
+      continue;
+    }
+    if (probe === "unusable") {
       continue;
     }
     let attempt: Attempt | null = null;
@@ -341,6 +395,9 @@ transcode.get("/services/:id", async (c) => {
       () => attempt.stop("client abort"),
       { once: true },
     );
+    if (c.req.raw.signal.aborted) {
+      attempt.stop("client abort");
+    }
 
     return new Response(responseBody(attempt), {
       status: 200,

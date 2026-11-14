@@ -3,6 +3,10 @@ import {
   buildVideoEncoderArgs,
   buildVideoFilter,
   encoderChain,
+  isV4l2Busy,
+  pipeStderr,
+  type ProbeAttempt,
+  probeWithBusyRetry,
   qualitySettings,
   v4l2ConstantQualityEnabled,
 } from "./encoder.ts";
@@ -127,6 +131,140 @@ Deno.test("encoderChain: HEVC 希望時のみ先頭、必ず x264 で終わる",
     "libx264",
   ]);
   assertEquals(encoderChain(false), ["h264_v4l2m2m", "libx264"]);
+});
+
+Deno.test("isV4l2Busy: デバイス占有の stderr だけを busy と判定する", () => {
+  // 実際のログ (旧セッションの ffmpeg がまだ /dev/video2 を握っている)。
+  const busyStderr = [
+    "[hevc_v4l2m2m @ 0x7f8] VIDIOC_STREAMON failed on capture context",
+    "[hevc_v4l2m2m @ 0x7f8] Error encoding a frame: Device or resource busy",
+    "Task finished with error code: -16 (Device or resource busy)",
+    "Conversion failed!",
+  ].join("\n");
+  assertEquals(isV4l2Busy(busyStderr), true);
+
+  // 待っても直らないエラーは busy ではない (次の候補へ進む)。
+  assertEquals(
+    isV4l2Busy("[hevc_v4l2m2m @ 0x7f8] Unknown option 'qp'"),
+    false,
+  );
+  assertEquals(
+    isV4l2Busy(
+      "[h264_v4l2m2m @ 0x7f8] Initialization failed: -38 (Function not implemented)",
+    ),
+    false,
+  );
+  // VIDIOC_STREAMON の失敗だけでは占有と断定できない。
+  assertEquals(
+    isV4l2Busy(
+      "[h264_v4l2m2m @ 0x7f8] VIDIOC_STREAMON failed on capture context",
+    ),
+    false,
+  );
+  assertEquals(isV4l2Busy(""), false);
+});
+
+// strerror の文言は LC_MESSAGES に従うので、英語以外の配備では errno で判定する。
+Deno.test("isV4l2Busy: 翻訳された stderr でも errno で判定する", () => {
+  const localized =
+    "Task finished with error code: -16 (Gerät oder Ressource belegt)";
+  assertEquals(localized.includes("Device or resource busy"), false);
+  assertEquals(isV4l2Busy(localized), true);
+});
+
+const BUSY_STDERR =
+  "Task finished with error code: -16 (Device or resource busy)";
+
+Deno.test("probeWithBusyRetry: EBUSY のあと成功すれば ok", async () => {
+  const results: ProbeAttempt[] = [
+    { success: false, stderr: BUSY_STDERR },
+    { success: false, stderr: BUSY_STDERR },
+    { success: true, stderr: "" },
+  ];
+  let calls = 0;
+  const result = await probeWithBusyRetry(() => {
+    const attempt = results[calls];
+    calls++;
+    return Promise.resolve(attempt);
+  });
+  assertEquals(result, "ok");
+});
+
+Deno.test("probeWithBusyRetry: 占有が続く限り再試行して busy", async () => {
+  let calls = 0;
+  const result = await probeWithBusyRetry(() => {
+    calls++;
+    return Promise.resolve({ success: false, stderr: BUSY_STDERR });
+  });
+  assertEquals(result, "busy");
+  // 窓の終わりは実時間なので回数は固定しないが、再試行はしている。
+  assertEquals(calls >= 2, true);
+});
+
+Deno.test("probeWithBusyRetry: busy でない失敗は再試行しない", async () => {
+  let calls = 0;
+  const result = await probeWithBusyRetry(() => {
+    calls++;
+    return Promise.resolve({
+      success: false,
+      stderr: "[hevc_v4l2m2m @ 0x7f8] Unknown option 'qp'",
+    });
+  });
+  assertEquals(result, "unusable");
+  assertEquals(calls, 1);
+});
+
+Deno.test("probeWithBusyRetry: 中断済みなら probe しない", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let calls = 0;
+  const result = await probeWithBusyRetry(() => {
+    calls++;
+    return Promise.resolve({ success: false, stderr: BUSY_STDERR });
+  }, controller.signal);
+  assertEquals(result, "unusable");
+  assertEquals(calls, 0);
+});
+
+Deno.test("probeWithBusyRetry: 待機中の中断で打ち切る", async () => {
+  const controller = new AbortController();
+  const started = Date.now();
+  let calls = 0;
+  setTimeout(() => controller.abort(), 50);
+  const result = await probeWithBusyRetry(() => {
+    calls++;
+    return Promise.resolve({ success: false, stderr: BUSY_STDERR });
+  }, controller.signal);
+  assertEquals(result, "unusable");
+  assertEquals(calls, 1);
+  // 100ms の再試行間隔を中断で打ち切るので、500ms の窓は待たない。
+  assertEquals(Date.now() - started < 500, true);
+});
+
+Deno.test("pipeStderr: onLine は行単位で改行を除いて渡す", async () => {
+  const lines: string[] = [];
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const encoder = new TextEncoder();
+      controller.enqueue(encoder.encode("a\nb"));
+      controller.enqueue(encoder.encode("c\n"));
+      controller.close();
+    },
+  });
+  await pipeStderr(stream, "[test]", (line) => lines.push(line));
+  assertEquals(lines, ["a", "bc"]);
+});
+
+Deno.test("pipeStderr: 改行で終わらない最終行も渡す", async () => {
+  const lines: string[] = [];
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("done"));
+      controller.close();
+    },
+  });
+  await pipeStderr(stream, "[test]", (line) => lines.push(line));
+  assertEquals(lines, ["done"]);
 });
 
 Deno.test("qualitySettings: 画質ごとの拡縮・CRF・QP", () => {

@@ -143,12 +143,17 @@ export function encoderChain(preferHevc: boolean): EncoderName[] {
     : ["h264_v4l2m2m", "libx264"];
 }
 
-/** 子プロセスの stderr を改行単位で prefix 付きログに流す。 */
+/**
+ * 子プロセスの stderr を改行単位で prefix 付きログに流す。caller が await せず
+ * 投げっぱなしにしても安全 (プロセス終了時の破損ストリームは握り潰す)。probe は
+ * 全文を集めたいので `onLine` を渡して await する。
+ */
 export function pipeStderr(
   src: ReadableStream<Uint8Array>,
   prefix: string,
-): void {
-  (async () => {
+  onLine?: (line: string) => void,
+): Promise<void> {
+  return (async () => {
     const reader = src.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -163,12 +168,14 @@ export function pipeStderr(
       for (const line of lines) {
         if (line) {
           console.error(`${prefix} ${line}`);
+          onLine?.(line);
         }
       }
     }
     buf += decoder.decode();
     if (buf) {
       console.error(`${prefix} ${buf}`);
+      onLine?.(buf);
     }
   })().catch(() => {
     // プロセス終了時の破損ストリームは無視
@@ -183,19 +190,63 @@ const PROBE_INPUT = "testsrc=size=1440x1080:rate=30:duration=0.34";
 const PROBE_TIMEOUT_MS = 5000;
 
 /**
- * 実際に数フレームをエンコードして使えるか確かめる。配信と同じフィルターと
- * エンコーダ引数を通すので、解像度制約やデバイス占有 (EBUSY) もここで分かる。
- * `v4l2Cq` は呼び出し側が 1 回だけ解決した値を渡す — 本番の ffmpeg と同じ
- * 引数で probe するため、ここで環境変数を読み直さない。
- * 所要時間は 1080p で HW 約 80ms / x264 約 40ms。
+ * probe 結果。`busy` はエンコーダ自体は使えるがデバイスが他のプロセスに占有
+ * されている状態 (直前のセッションの ffmpeg がまだ終了していない) で、
+ * 候補から外すのではなく少し待って再試行すべきことを表す。
  */
-export async function probeVideoEncoder(
+export type ProbeResult = "ok" | "unusable" | "busy";
+
+/** probe 1 回分の結果。stderr は busy 判定にだけ使う。 */
+export type ProbeAttempt = { success: boolean; stderr: string };
+
+/**
+ * EBUSY の再試行間隔と、最初の EBUSY から再試行を続ける上限。同じクライアントの
+ * 切り替えでは直前の ffmpeg が約 120ms でデバイスを解放するので 500ms で足りる。
+ * 別のクライアントが視聴中でデバイスが本当に埋まっている場合の待ちを短く保つ
+ * ため、初回試行の所要時間はこの上限に含めない。
+ */
+const BUSY_RETRY_MS = 100;
+const BUSY_RETRY_WINDOW_MS = 500;
+
+/**
+ * EBUSY (デバイス占有) を判定する。`strerror` の文言は LC_MESSAGES に従うため
+ * 英語圏以外の配備では一致しない。ffmpeg が付ける errno (`error code: -16`) は
+ * 翻訳されず、probe は `-f null` なので他の理由で -16 は出ない。
+ */
+export function isV4l2Busy(stderr: string): boolean {
+  return stderr.includes("Device or resource busy") ||
+    stderr.includes("error code: -16");
+}
+
+/** signal で中断可能な待機。中断時は即座に resolve する。 */
+function delayAbortable(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", finish, { once: true });
+  });
+}
+
+/**
+ * probe を 1 回実行し、成功可否と集めた stderr を返す。`signal` の中断で
+ * ffmpeg を即座に止める — 切断済みのリクエストの probe がデバイスを握り続けると
+ * 次の試行が EBUSY になるため。
+ */
+async function runProbe(
   encoder: EncoderName,
   quality: Quality,
   v4l2Cq: boolean,
-): Promise<boolean> {
+  signal?: AbortSignal,
+): Promise<ProbeAttempt> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  const onAbort = () => controller.abort();
+  signal?.addEventListener("abort", onAbort, { once: true });
+  let stderr = "";
   try {
     const child = new Deno.Command("ffmpeg", {
       args: [
@@ -220,12 +271,79 @@ export async function probeVideoEncoder(
       stderr: "piped",
       signal: controller.signal,
     }).spawn();
-    pipeStderr(child.stderr, `[encoder-probe ${encoder}]`);
+    const pumped = pipeStderr(
+      child.stderr,
+      `[encoder-probe ${encoder}]`,
+      (line) => {
+        stderr += `${line}\n`;
+      },
+    );
     const status = await child.status;
-    return status.success;
-  } catch {
-    return false;
+    // 判定に使うので stderr を読み切ってから返す。
+    await pumped;
+    return { success: status.success, stderr };
+  } catch (e) {
+    if (!controller.signal.aborted) {
+      // 中断でもタイムアウトでもない失敗は原因を残す (ffmpeg 不在など)。
+      console.error(`[encoder-probe ${encoder}] probe failed`, e);
+    }
+    return { success: false, stderr };
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
   }
+}
+
+/**
+ * probe の再試行方針。EBUSY の間だけ 100ms 間隔で `BUSY_RETRY_WINDOW_MS` まで
+ * 繰り返す。中断されたら再試行せず `unusable` を返す (呼び出し側は中断で
+ * ループを抜けるので、どのみち使われない)。
+ */
+export async function probeWithBusyRetry(
+  run: () => Promise<ProbeAttempt>,
+  signal?: AbortSignal,
+): Promise<ProbeResult> {
+  // 初回試行が遅くても待ち時間を削らないよう、期限は最初の EBUSY から数える。
+  let retryDeadline: number | null = null;
+  while (true) {
+    if (signal?.aborted) {
+      return "unusable";
+    }
+    const { success, stderr } = await run();
+    if (success) {
+      return "ok";
+    }
+    if (!isV4l2Busy(stderr)) {
+      return "unusable";
+    }
+    retryDeadline ??= Date.now() + BUSY_RETRY_WINDOW_MS;
+    if (Date.now() + BUSY_RETRY_MS >= retryDeadline) {
+      return "busy";
+    }
+    await delayAbortable(BUSY_RETRY_MS, signal);
+  }
+}
+
+/**
+ * 実際に数フレームをエンコードして使えるか確かめる。配信と同じフィルターと
+ * エンコーダ引数を通すので、解像度制約やデバイス占有 (EBUSY) もここで分かる。
+ * `v4l2Cq` は呼び出し側が 1 回だけ解決した値を渡す — 本番の ffmpeg と同じ
+ * 引数で probe するため、ここで環境変数を読み直さない。
+ * 所要時間は 1080p で HW 約 80ms / x264 約 40ms。
+ *
+ * EBUSY は直前に終了したセッションの ffmpeg がデバイスを解放するまでの
+ * 数百 ms の過渡状態なので、最初の EBUSY から `BUSY_RETRY_WINDOW_MS` の間
+ * 再試行し、それでも占有されたままなら `busy` を返す。`signal` が中断されたら再試行を
+ * 止めて `unusable` を返す (呼び出し側は中断でループを抜ける)。
+ */
+export async function probeVideoEncoder(
+  encoder: EncoderName,
+  quality: Quality,
+  v4l2Cq: boolean,
+  signal?: AbortSignal,
+): Promise<ProbeResult> {
+  return await probeWithBusyRetry(
+    () => runProbe(encoder, quality, v4l2Cq, signal),
+    signal,
+  );
 }
