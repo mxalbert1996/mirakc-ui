@@ -79,6 +79,12 @@ mirakc-ui stores its settings (e.g. keyword recording rules) in a SQLite
 database under `/app/data`. Mount this directory as shown above so the settings
 survive container recreation.
 
+On Apple AVE hardware, add `V4L2_CQ: 1` to the `environment:` block to encode
+with constant QP instead of a target bitrate (see
+[docs/transcode-quality.md](docs/transcode-quality.md)). With this setting,
+hardware encoders that lack constant QP fail their probe and the stream falls
+back to libx264.
+
 After launching, open <http://localhost:8888/>. It opens the program guide; from
 there you can search programs, schedule recordings, and start live viewing.
 
