@@ -42,7 +42,7 @@ export const Placeholder: Story = {
 };
 
 /**
- * ジャンルグラデの stage + クローム (ホバー/フォーカスで表示)。
+ * ジャンルグラデの stage + クローム (ポインタ操作で表示、アイドルで自動非表示)。
  * streamUrl はダミーのため実映像は出ない。
  */
 export const Live: Story = {
@@ -50,8 +50,8 @@ export const Live: Story = {
 };
 
 /**
- * 実況コメントオーバーレイ付き。右端の開閉タブ (ホバーで表示) でコメントが
- * スライドインする。
+ * 実況コメントオーバーレイ付き。右端の開閉タブ (コントロールと同じ自動非表示)
+ * でコメントがスライドインする。
  */
 export const WithComments: Story = {
   args: {

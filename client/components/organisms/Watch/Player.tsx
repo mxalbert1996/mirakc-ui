@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChangeEvent, PointerEvent as ReactPointerEvent } from "react";
+import type {
+  ChangeEvent,
+  FocusEvent as ReactFocusEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
 import type { components } from "../../../lib/api/schema.d.ts";
 import { genreOf, genreVars } from "../../../lib/genre.ts";
 import type { LiveComment } from "../../../lib/live-comment.ts";
@@ -148,6 +153,8 @@ export default function WatchPlayer(props: Props) {
   );
   // 音声 / 画質のポップメニュー。
   const [menu, setMenu] = useState<"audio" | "quality" | null>(null);
+  // ポップメニューが開いている間はアイドル自動非表示を止める。
+  const menuOpenRef = useRef(false);
 
   // captionVisible prop の変化を aribb24 コントローラーに反映
   useEffect(() => {
@@ -437,16 +444,62 @@ export default function WatchPlayer(props: Props) {
     setMuted(value === 0);
   };
 
+  const hideControls = () => {
+    menuOpenRef.current = false;
+    setMenu(null);
+    setControlsVisible(false);
+  };
+
   // ポインタ操作で controls を表示し、2.6 秒操作が無ければ自動で隠す。
-  const revealControls = () => {
-    setControlsVisible(true);
+  const scheduleHide = () => {
     if (hideTimerRef.current !== undefined) {
       clearTimeout(hideTimerRef.current);
     }
     hideTimerRef.current = setTimeout(() => {
-      setControlsVisible(false);
-      setMenu(null);
+      // メニューを開いている間は隠さない。閉じたときに予約し直す。
+      if (menuOpenRef.current) {
+        return;
+      }
+      hideControls();
     }, 2600);
+  };
+
+  const revealControls = (e: ReactPointerEvent<HTMLDivElement>) => {
+    // タッチはタップでの開閉に任せる (指の震えで出し入れしない)。
+    if (e.pointerType === "touch") {
+      return;
+    }
+    setControlsVisible(true);
+    scheduleHide();
+  };
+
+  const openMenu = (next: "audio" | "quality") => {
+    menuOpenRef.current = true;
+    setMenu(next);
+  };
+
+  const closeMenu = () => {
+    menuOpenRef.current = false;
+    setMenu(null);
+    scheduleHide();
+  };
+
+  // メニューからフォーカスが外れたら閉じる。開いたまま隠れると
+  // menuOpenRef が立ちっぱなしになり、自動非表示が二度と効かなくなる。
+  const handleMenuBlur = (e: ReactFocusEvent<HTMLDivElement>) => {
+    if (menu === null) {
+      return;
+    }
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) {
+      return;
+    }
+    closeMenu();
+  };
+
+  const handlePlayerKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape" && menu !== null) {
+      closeMenu();
+    }
   };
 
   // video 領域のタップ (touch) は controls の表示を反転する。
@@ -454,7 +507,25 @@ export default function WatchPlayer(props: Props) {
     if (e.pointerType !== "touch") {
       return;
     }
-    setControlsVisible((prev) => !prev);
+    // タッチの開閉はここで完結させる (親のメニュー外クリック処理に渡さない)。
+    e.stopPropagation();
+    if (controlsVisible) {
+      hideControls();
+    } else {
+      setControlsVisible(true);
+    }
+  };
+
+  // メニューを開いたまま外側を押したら閉じる (開きっぱなしで自動非表示が
+  // 止まったままにならないように)。
+  const handlePlayerPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (menu === null) {
+      return;
+    }
+    if ((e.target as Element).closest(`.${styles.menuWrap}`)) {
+      return;
+    }
+    closeMenu();
   };
 
   // アンマウント時に自動非表示タイマーを掃除する。
@@ -522,7 +593,10 @@ export default function WatchPlayer(props: Props) {
         className={`${styles.player} ${
           controlsVisible ? styles.controlsVisible : ""
         }`}
+        data-controls-visible={controlsVisible}
         onPointerMove={revealControls}
+        onPointerDown={handlePlayerPointerDown}
+        onKeyDown={handlePlayerKeyDown}
         tabIndex={0}
       >
         <div className={styles.stage} style={{ background: stageBg }} />
@@ -659,11 +733,12 @@ export default function WatchPlayer(props: Props) {
 
             <span className={styles.spacer} />
 
-            <div className={styles.menuWrap}>
+            <div className={styles.menuWrap} onBlur={handleMenuBlur}>
               <button
                 type="button"
                 className={`${styles.cbtn} ${styles.txt}`}
-                onClick={() => setMenu((m) => (m === "audio" ? null : "audio"))}
+                onClick={() =>
+                  menu === "audio" ? closeMenu() : openMenu("audio")}
                 aria-label={t("watch.audio.label")}
               >
                 {audioLabel(props.audioTrackIndex)}
@@ -671,7 +746,7 @@ export default function WatchPlayer(props: Props) {
               {menu === "audio" && (
                 <div
                   className={styles.popmenu}
-                  onMouseLeave={() => setMenu(null)}
+                  onMouseLeave={closeMenu}
                 >
                   <div className={styles.popHead}>{t("watch.audio.label")}</div>
                   {audioOptions.map((i) => (
@@ -683,7 +758,7 @@ export default function WatchPlayer(props: Props) {
                       }`}
                       onClick={() => {
                         props.onAudioTrackChange(i);
-                        setMenu(null);
+                        closeMenu();
                       }}
                     >
                       {audioLabel(i)}
@@ -693,12 +768,12 @@ export default function WatchPlayer(props: Props) {
               )}
             </div>
 
-            <div className={styles.menuWrap}>
+            <div className={styles.menuWrap} onBlur={handleMenuBlur}>
               <button
                 type="button"
                 className={`${styles.cbtn} ${styles.txt}`}
                 onClick={() =>
-                  setMenu((m) => (m === "quality" ? null : "quality"))}
+                  menu === "quality" ? closeMenu() : openMenu("quality")}
                 aria-label={t("watch.quality.label")}
               >
                 {props.quality}
@@ -706,7 +781,7 @@ export default function WatchPlayer(props: Props) {
               {menu === "quality" && (
                 <div
                   className={styles.popmenu}
-                  onMouseLeave={() => setMenu(null)}
+                  onMouseLeave={closeMenu}
                 >
                   <div className={styles.popHead}>
                     {t("watch.quality.label")}
@@ -720,7 +795,7 @@ export default function WatchPlayer(props: Props) {
                       }`}
                       onClick={() => {
                         props.onQualityChange(q);
-                        setMenu(null);
+                        closeMenu();
                       }}
                     >
                       {q}

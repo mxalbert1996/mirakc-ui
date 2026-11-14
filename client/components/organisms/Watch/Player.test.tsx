@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import WatchPlayer from "./Player.tsx";
 import { sampleLiveComments } from "../../../lib/fixtures.ts";
 import { t } from "../../../locales/i18n.ts";
@@ -12,6 +12,10 @@ import { t } from "../../../locales/i18n.ts";
 // ないため、解決しない Promise を返すローダーを注入する。これで init() は await
 // で停止し、controls UI だけが同期描画される。
 const pending = () => new Promise<never>(() => {});
+
+function playerFrame(container: HTMLElement): HTMLElement {
+  return container.querySelector("[data-controls-visible]") as HTMLElement;
+}
 
 type Props = Parameters<typeof WatchPlayer>[0];
 
@@ -132,6 +136,167 @@ describe("WatchPlayer", () => {
       screen.getByRole("button", { name: t("watch.live.overlayHide") }),
     );
     expect(overlay.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("ポインタ移動で controls を表示し、操作が止まると自動で隠す", () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(<WatchPlayer {...baseProps()} />);
+      const player = playerFrame(container);
+      expect(player.getAttribute("data-controls-visible")).toBe("false");
+
+      fireEvent.pointerMove(player);
+      expect(player.getAttribute("data-controls-visible")).toBe("true");
+
+      act(() => {
+        vi.advanceTimersByTime(2600);
+      });
+      expect(player.getAttribute("data-controls-visible")).toBe("false");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ポップメニューを開いている間は自動で隠さない", () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(<WatchPlayer {...baseProps()} />);
+      const player = playerFrame(container);
+      fireEvent.pointerMove(player);
+      fireEvent.click(
+        screen.getByRole("button", { name: t("watch.audio.label") }),
+      );
+
+      act(() => {
+        vi.advanceTimersByTime(5200);
+      });
+      expect(player.getAttribute("data-controls-visible")).toBe("true");
+      expect(screen.getByText(`${t("watch.audio.sub")} (eng)`)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("メニューを閉じると自動非表示が再開する", () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(<WatchPlayer {...baseProps()} />);
+      const player = playerFrame(container);
+      fireEvent.pointerMove(player);
+      fireEvent.click(
+        screen.getByRole("button", { name: t("watch.audio.label") }),
+      );
+
+      // 開いている間は、開く前に予約されたタイマーが来ても隠れない。
+      act(() => {
+        vi.advanceTimersByTime(2600);
+      });
+      expect(player.getAttribute("data-controls-visible")).toBe("true");
+
+      // 閉じた時点から改めて 2.6 秒を数え直す。
+      fireEvent.click(screen.getByText(`${t("watch.audio.sub")} (eng)`));
+      act(() => {
+        vi.advanceTimersByTime(2600);
+      });
+      expect(player.getAttribute("data-controls-visible")).toBe("false");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("タッチはタップでの開閉だけに従う (移動やメニュー外クリックに反応しない)", () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(<WatchPlayer {...baseProps()} />);
+      const player = playerFrame(container);
+      const video = container.querySelector("video")!;
+
+      fireEvent.pointerMove(player, { pointerType: "touch" });
+      expect(player.getAttribute("data-controls-visible")).toBe("false");
+
+      fireEvent.pointerDown(video, { pointerType: "touch" });
+      expect(player.getAttribute("data-controls-visible")).toBe("true");
+
+      act(() => {
+        vi.advanceTimersByTime(2600);
+      });
+      expect(player.getAttribute("data-controls-visible")).toBe("true");
+
+      fireEvent.pointerDown(video, { pointerType: "touch" });
+      expect(player.getAttribute("data-controls-visible")).toBe("false");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("メニューをタッチで閉じても、その後のタップ表示は自動非表示に巻き込まれない", () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(<WatchPlayer {...baseProps()} />);
+      const player = playerFrame(container);
+      const video = container.querySelector("video")!;
+      fireEvent.pointerDown(video, { pointerType: "touch" });
+      fireEvent.click(
+        screen.getByRole("button", { name: t("watch.audio.label") }),
+      );
+
+      fireEvent.pointerDown(video, { pointerType: "touch" });
+      expect(player.getAttribute("data-controls-visible")).toBe("false");
+
+      fireEvent.pointerDown(video, { pointerType: "touch" });
+      act(() => {
+        vi.advanceTimersByTime(2600);
+      });
+      expect(player.getAttribute("data-controls-visible")).toBe("true");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Escape でメニューを閉じ、フォーカスが外れても開いたままにしない", () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(<WatchPlayer {...baseProps()} />);
+      const player = playerFrame(container);
+      fireEvent.pointerMove(player);
+      fireEvent.click(
+        screen.getByRole("button", { name: t("watch.audio.label") }),
+      );
+
+      fireEvent.keyDown(player, { key: "Escape" });
+      expect(screen.queryByText(`${t("watch.audio.sub")} (eng)`)).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(2600);
+      });
+      expect(player.getAttribute("data-controls-visible")).toBe("false");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("メニュー外を押すとメニューが閉じて自動非表示に戻る", () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(<WatchPlayer {...baseProps()} />);
+      const player = playerFrame(container);
+      const video = container.querySelector("video")!;
+      fireEvent.pointerMove(player);
+      fireEvent.click(
+        screen.getByRole("button", { name: t("watch.audio.label") }),
+      );
+      expect(screen.getByText(`${t("watch.audio.sub")} (eng)`)).toBeTruthy();
+
+      fireEvent.pointerDown(video, { pointerType: "mouse" });
+      expect(screen.queryByText(`${t("watch.audio.sub")} (eng)`)).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(2600);
+      });
+      expect(player.getAttribute("data-controls-visible")).toBe("false");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("pause されても (メディアキー等) 即座に再生へ戻し停止させない", () => {

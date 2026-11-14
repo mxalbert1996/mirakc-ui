@@ -54,27 +54,25 @@
 }
 
 /* ===== 自動非表示するコントロール ===== */
+/* 表示/非表示は JS のアイドルタイマー (pointermove で再表示) だけで決める。
+   :hover で表示するとマウスを止めたままでも隠れないため、ここでは使わない。 */
 .controls {
   opacity: 0;
+  pointer-events: none;
   transition: opacity 0.26s ease;
 }
 
-@media (any-hover: hover) {
-  .player:hover .controls {
-    opacity: 1;
-  }
-}
-
-/* コントロール内のボタンにフォーカスがあるときだけ表示する (キーボード操作)。
-   プレイヤー枠 (tabIndex=0) 自体への focus では出さない。全画面化すると枠に
-   フォーカスが入るため、.player:focus-within だとカーソルが隠れても UI だけ
-   残り続けてしまう。 */
-.controls:focus-within {
+/* キーボード操作中 (:focus-within だとマウスクリックの focus でも一致して
+   アイドル非表示が効かなくなる) と、range のつまみ等を押している間は表示を保つ。 */
+.controls:has(:focus-visible),
+.controls:has(:active) {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .controlsVisible .controls {
   opacity: 1;
+  pointer-events: auto;
 }
 
 /* 全画面表示中、コントロールがアイドルで隠れているときだけカーソルを隠す。
@@ -149,14 +147,7 @@
   }
 }
 
-@media (any-hover: hover) {
-  .player:hover .commentsToggle {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-
-.player:focus-within .commentsToggle,
+.commentsToggle:focus-visible,
 .controlsVisible .commentsToggle {
   opacity: 1;
   pointer-events: auto;
