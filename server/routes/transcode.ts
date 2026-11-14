@@ -6,7 +6,7 @@ import {
   type EncoderName,
   pipeStderr,
   probeVideoEncoder,
-  qualitySettings,
+  v4l2ConstantQualityEnabled,
 } from "../lib/encoder.ts";
 import { normalizeQuality, type Quality } from "../lib/quality.ts";
 import { mirakcApiUrlOf } from "../lib/mirakc.ts";
@@ -37,6 +37,7 @@ type Attempt = {
 type StartOptions = {
   encoder: EncoderName;
   quality: Quality;
+  v4l2Cq: boolean;
   audioTrackIndex: number;
   rawMode: boolean;
   streamUrl: string;
@@ -66,7 +67,8 @@ function spawnFfmpeg(opts: StartOptions): Deno.ChildProcess {
       buildVideoFilter(opts.encoder, opts.quality),
       ...buildVideoEncoderArgs(
         opts.encoder,
-        qualitySettings[opts.quality].bitrate,
+        opts.quality,
+        opts.v4l2Cq,
       ),
       "-c:a",
       "aac",
@@ -281,6 +283,8 @@ transcode.get("/services/:id", async (c) => {
   const quality = normalizeQuality(url.searchParams.get("quality"));
   const rawMode = url.searchParams.get("raw") === "1";
   const preferHevc = url.searchParams.get("codec") === "hevc";
+  // probe と本番の ffmpeg で同じ画質引数を使うため、1 回だけ読む。
+  const v4l2Cq = v4l2ConstantQualityEnabled();
 
   const streamUrl = new URL(
     `${mirakcApiUrl}/services/${serviceId}/stream?decode=1`,
@@ -290,7 +294,7 @@ transcode.get("/services/:id", async (c) => {
     if (c.req.raw.signal.aborted) {
       break;
     }
-    if (!(await probeVideoEncoder(encoder, quality))) {
+    if (!(await probeVideoEncoder(encoder, quality, v4l2Cq))) {
       continue;
     }
     let attempt: Attempt | null = null;
@@ -298,6 +302,7 @@ transcode.get("/services/:id", async (c) => {
       attempt = await startAttempt({
         encoder,
         quality,
+        v4l2Cq,
         audioTrackIndex,
         rawMode,
         streamUrl,
