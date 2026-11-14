@@ -1,0 +1,1440 @@
+diff --git a/libavcodec/Makefile b/libavcodec/Makefile
+index 95ba308..a68feea 100644
+--- a/libavcodec/Makefile
++++ b/libavcodec/Makefile
+@@ -181,6 +181,7 @@ OBJS-$(CONFIG_VAAPI_ENCODE)            += vaapi_encode.o hw_base_encode.o
+ OBJS-$(CONFIG_AV1_AMF_ENCODER)         += amfenc_av1.o
+ OBJS-$(CONFIG_AV1_AMF_DECODER)         += amfdec.o
+ OBJS-$(CONFIG_VC1DSP)                  += vc1dsp.o
++OBJS-$(CONFIG_V4L2_M2M)                += v4l2_enc_utils.o
+ OBJS-$(CONFIG_VIDEODSP)                += videodsp.o
+ OBJS-$(CONFIG_VP3DSP)                  += vp3dsp.o
+ OBJS-$(CONFIG_VP8DSP)                  += vp8dsp.o
+@@ -1382,6 +1383,7 @@ TESTPROGS-$(CONFIG_H264_METADATA_BSF)     += h264_levels
+ TESTPROGS-$(CONFIG_HEVC_METADATA_BSF)     += h265_levels
+ TESTPROGS-$(CONFIG_RANGECODER)            += rangecoder
+ TESTPROGS-$(CONFIG_SNOW_ENCODER)          += snowenc
++TESTPROGS-$(CONFIG_V4L2_M2M)              += v4l2_enc_utils
+ 
+ TESTOBJS = dctref.o
+ 
+diff --git a/libavcodec/tests/v4l2_enc_utils.c b/libavcodec/tests/v4l2_enc_utils.c
+new file mode 100644
+index 0000000..647b7dc
+--- /dev/null
++++ b/libavcodec/tests/v4l2_enc_utils.c
+@@ -0,0 +1,602 @@
++/*
++ * Tests for the V4L2 mem2mem encoder helpers (no device needed)
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include <inttypes.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "libavutil/frame.h"
++#include "libavutil/mem.h"
++
++#include "libavcodec/v4l2_enc_utils.c"
++
++static int failures;
++
++#define CHECK(cond, ...) do {                                   \
++        if (!(cond)) {                                          \
++            fprintf(stderr, "FAIL %s:%d: ", __FILE__, __LINE__); \
++            fprintf(stderr, __VA_ARGS__);                       \
++            fprintf(stderr, "\n");                              \
++            failures++;                                         \
++        }                                                       \
++    } while (0)
++
++/* A value that differs between planes, lines and columns. */
++static uint8_t pattern(int plane, int x, int y)
++{
++    return (uint8_t)(plane * 71 + x * 7 + y * 13 + (x * y >> 3));
++}
++
++static AVFrame *make_frame(enum AVPixelFormat fmt, int w, int h)
++{
++    AVFrame *f = av_frame_alloc();
++    int p, x, y, nb_planes = av_pix_fmt_count_planes(fmt);
++
++    if (!f)
++        return NULL;
++    f->format = fmt;
++    f->width  = w;
++    f->height = h;
++    /* a large alignment, so linesize != width */
++    if (av_frame_get_buffer(f, 128) < 0) {
++        av_frame_free(&f);
++        return NULL;
++    }
++    for (p = 0; p < nb_planes; p++) {
++        const AVPixFmtDescriptor *d = av_pix_fmt_desc_get(fmt);
++        int rows  = is_chroma_plane(p) ? AV_CEIL_RSHIFT(h, d->log2_chroma_h) : h;
++        int bytes = av_image_get_linesize(fmt, w, p);
++
++        for (y = 0; y < rows; y++)
++            for (x = 0; x < bytes; x++)
++                f->data[p][y * f->linesize[p] + x] = pattern(p, x, y);
++    }
++    return f;
++}
++
++/*
++ * Copy a w x h frame into a buffer whose format is fw x fh with the given
++ * bytesperline (one memory plane), and check every byte the encoder reads
++ * against a layout computed here independently:
++ * plane p starts at off[p] with stride[p] and has rows[p] lines.
++ */
++static void check_contiguous(const char *name, enum AVPixelFormat fmt,
++                             int w, int h, int fw, int fh, int bpl,
++                             const size_t off[], const int stride[],
++                             const int rows[], const int vis_rows[],
++                             const int bytes[], const int vis_bytes[],
++                             const int group[], size_t len)
++{
++    AVFrame *f = make_frame(fmt, w, h);
++    uint8_t *buf = av_mallocz(len);
++    uint8_t *dst[1] = { buf };
++    size_t dst_len[1] = { len }, used[1] = { 0 };
++    int p, x, y, ret, nb_planes = av_pix_fmt_count_planes(fmt);
++    int bad = 0;
++
++    if (!f || !buf) {
++        CHECK(0, "%s: out of memory", name);
++        goto end;
++    }
++    memset(buf, 0xEE, len);
++    ret = ff_v4l2_enc_copy_frame(f, fmt, dst, dst_len, &bpl, 1, fw, fh, used);
++    CHECK(ret == 0, "%s: copy returned %d", name, ret);
++    if (ret)
++        goto end;
++    CHECK(used[0] == off[nb_planes - 1] + (size_t)stride[nb_planes - 1] * rows[nb_planes - 1],
++          "%s: bytesused %zu", name, used[0]);
++
++    for (p = 0; p < nb_planes; p++) {
++        for (y = 0; y < rows[p] && bad < 10; y++) {
++            for (x = 0; x < bytes[p] && bad < 10; x++) {
++                int sx = x, sy = FFMIN(y, vis_rows[p] - 1);
++                uint8_t got = buf[off[p] + (size_t)y * stride[p] + x];
++
++                if (sx >= vis_bytes[p])     /* padded column: the last sample position */
++                    sx = vis_bytes[p] - group[p] + (x - vis_bytes[p]) % group[p];
++                if (got != pattern(p, sx, sy)) {
++                    CHECK(0, "%s: plane %d (%d,%d) = %d, want %d (source %d,%d)",
++                          name, p, x, y, got, pattern(p, sx, sy), sx, sy);
++                    bad++;
++                }
++            }
++        }
++    }
++    /* nothing written past the last plane */
++    for (x = (int)used[0]; x < (int)len && x < (int)used[0] + 64; x++)
++        if (buf[x] != 0xEE) {
++            CHECK(0, "%s: wrote past bytesused at %d", name, x);
++            break;
++        }
++end:
++    av_frame_free(&f);
++    av_free(buf);
++}
++
++static void test_copy(void)
++{
++    /* SD: 720 wide, the driver's bytesperline is 768 (64-aligned) */
++    {
++        const size_t off[]    = { 0, 768 * 576 };
++        const int stride[]    = { 768, 768 };
++        const int rows[]      = { 576, 288 }, vis_rows[] = { 576, 288 };
++        const int bytes[]     = { 720, 720 }, vis_bytes[] = { 720, 720 };
++        const int group[]     = { 1, 2 };
++        check_contiguous("nv12 720x576 bpl 768", AV_PIX_FMT_NV12, 720, 576, 720, 576,
++                         768, off, stride, rows, vis_rows, bytes, vis_bytes, group,
++                         768 * 576 * 3 / 2);
++    }
++    /* 1080 lines: the driver rounds the height to 1088 */
++    {
++        const size_t off[]    = { 0, 1920 * 1088 };
++        const int stride[]    = { 1920, 1920 };
++        const int rows[]      = { 1088, 544 }, vis_rows[] = { 1080, 540 };
++        const int bytes[]     = { 1920, 1920 }, vis_bytes[] = { 1920, 1920 };
++        const int group[]     = { 1, 2 };
++        check_contiguous("nv12 1920x1080 in 1920x1088", AV_PIX_FMT_NV12, 1920, 1080,
++                         1920, 1088, 1920, off, stride, rows, vis_rows, bytes,
++                         vis_bytes, group, 1920 * 1088 * 3 / 2);
++    }
++    /* HEVC sizing: chroma still at bytesperline * height, slack after it */
++    {
++        const size_t off[]    = { 0, 768 * 576 };
++        const int stride[]    = { 768, 768 };
++        const int rows[]      = { 576, 288 }, vis_rows[] = { 576, 288 };
++        const int bytes[]     = { 720, 720 }, vis_bytes[] = { 720, 720 };
++        const int group[]     = { 1, 2 };
++        check_contiguous("nv12 720x576 hevc slack", AV_PIX_FMT_NV12, 720, 576, 720, 576,
++                         768, off, stride, rows, vis_rows, bytes, vis_bytes, group,
++                         768 * 576 + 768 * (FFALIGN(576, 64) / 2));
++    }
++    /* width and height both padded: 1916x1078 in 1920x1088 */
++    {
++        const size_t off[]    = { 0, 1984 * 1088 };
++        const int stride[]    = { 1984, 1984 };
++        const int rows[]      = { 1088, 544 }, vis_rows[] = { 1078, 539 };
++        const int bytes[]     = { 1920, 1920 }, vis_bytes[] = { 1916, 1916 };
++        const int group[]     = { 1, 2 };
++        check_contiguous("nv12 1916x1078 in 1920x1088", AV_PIX_FMT_NV12, 1916, 1078,
++                         1920, 1088, 1984, off, stride, rows, vis_rows, bytes,
++                         vis_bytes, group, 1984 * 1088 * 3 / 2);
++    }
++    /* P010: two bytes a sample */
++    {
++        const size_t off[]    = { 0, 1536 * 576 };
++        const int stride[]    = { 1536, 1536 };
++        const int rows[]      = { 576, 288 }, vis_rows[] = { 576, 288 };
++        const int bytes[]     = { 1440, 1440 }, vis_bytes[] = { 1440, 1440 };
++        const int group[]     = { 2, 4 };
++        check_contiguous("p010 720x576 bpl 1536", AV_PIX_FMT_P010LE, 720, 576, 720, 576,
++                         1536, off, stride, rows, vis_rows, bytes, vis_bytes, group,
++                         1536 * 576 * 3 / 2);
++    }
++    /* single-planar YUV420 (I420): chroma lines are half of bytesperline */
++    {
++        const size_t off[]    = { 0, 768 * 576, 768 * 576 + 384 * 288 };
++        const int stride[]    = { 768, 384, 384 };
++        const int rows[]      = { 576, 288, 288 }, vis_rows[] = { 576, 288, 288 };
++        const int bytes[]     = { 720, 360, 360 }, vis_bytes[] = { 720, 360, 360 };
++        const int group[]     = { 1, 1, 1 };
++        check_contiguous("yuv420p 720x576 bpl 768", AV_PIX_FMT_YUV420P, 720, 576, 720, 576,
++                         768, off, stride, rows, vis_rows, bytes, vis_bytes, group,
++                         768 * 576 * 3 / 2);
++    }
++
++    /* a buffer too small is refused, not overrun */
++    {
++        AVFrame *f = make_frame(AV_PIX_FMT_NV12, 720, 576);
++        size_t len = 768 * 576, used[1];
++        uint8_t *buf = av_malloc(len), *dst[1] = { buf };
++        int bpl = 768;
++
++        CHECK(f && buf, "oom");
++        if (f && buf)
++            CHECK(ff_v4l2_enc_copy_frame(f, AV_PIX_FMT_NV12, dst, &len, &bpl, 1,
++                                         720, 576, used) == AVERROR(ENOSPC),
++                  "short buffer accepted");
++        av_frame_free(&f);
++        av_free(buf);
++    }
++
++    /* two memory planes (NV12M), each with its own bytesperline */
++    {
++        AVFrame *f = make_frame(AV_PIX_FMT_NV12, 720, 576);
++        size_t len[2] = { 768 * 576, 832 * 288 }, used[2] = { 0 };
++        uint8_t *y = av_mallocz(len[0]), *uv = av_mallocz(len[1]);
++        uint8_t *dst[2] = { y, uv };
++        int bpl[2] = { 768, 832 }, ret, i, bad = 0;
++
++        if (f && y && uv) {
++            ret = ff_v4l2_enc_copy_frame(f, AV_PIX_FMT_NV12, dst, len, bpl, 2,
++                                         720, 576, used);
++            CHECK(ret == 0 && used[0] == len[0] && used[1] == len[1],
++                  "nv12m: ret %d used %zu %zu", ret, used[0], used[1]);
++            for (i = 0; i < 720 * 576 && !bad; i++)
++                bad |= y[(i / 720) * 768 + i % 720] != pattern(0, i % 720, i / 720);
++            for (i = 0; i < 720 * 288 && !bad; i++)
++                bad |= uv[(i / 720) * 832 + i % 720] != pattern(1, i % 720, i / 720);
++            CHECK(!bad, "nv12m: wrong sample");
++        } else
++            CHECK(0, "oom");
++        av_frame_free(&f);
++        av_free(y);
++        av_free(uv);
++    }
++}
++
++/* yuv420p -> NV12 and yuv420p10 -> P010 while copying, with padding */
++static void test_convert(void)
++{
++    const int w = 718, h = 574, fw = 720, fh = 576, bpl = 768;
++    AVFrame *f = make_frame(AV_PIX_FMT_YUV420P, w, h);
++    size_t len = (size_t)bpl * fh * 3 / 2, used[1];
++    uint8_t *buf = av_mallocz(len), *dst[1] = { buf };
++    int x, y, bad = 0, b = bpl;
++
++    CHECK(ff_v4l2_enc_can_convert(AV_PIX_FMT_YUV420P, AV_PIX_FMT_NV12), "can_convert");
++    CHECK(!ff_v4l2_enc_can_convert(AV_PIX_FMT_YUV422P, AV_PIX_FMT_NV12), "can_convert 422");
++    CHECK(ff_v4l2_enc_request_fmt(AV_PIX_FMT_YUV420P10LE) == AV_PIX_FMT_P010LE, "request_fmt");
++
++    if (!f || !buf) {
++        CHECK(0, "oom");
++        goto p010;
++    }
++    CHECK(!ff_v4l2_enc_copy_frame(f, AV_PIX_FMT_NV12, dst, &len, &b, 1, fw, fh, used),
++          "yuv420p->nv12 failed");
++    for (y = 0; y < fh && bad < 5; y++)
++        for (x = 0; x < fw && bad < 5; x++) {
++            int sx = FFMIN(x, w - 1), sy = FFMIN(y, h - 1);
++            if (buf[y * bpl + x] != pattern(0, sx, sy)) {
++                CHECK(0, "nv12 Y (%d,%d)", x, y);
++                bad++;
++            }
++        }
++    for (y = 0; y < fh / 2 && bad < 5; y++)
++        for (x = 0; x < fw / 2 && bad < 5; x++) {
++            int sx = FFMIN(x, w / 2 - 1), sy = FFMIN(y, h / 2 - 1);
++            const uint8_t *uv = buf + bpl * fh + y * bpl + 2 * x;
++            if (uv[0] != pattern(1, sx, sy) || uv[1] != pattern(2, sx, sy)) {
++                CHECK(0, "nv12 UV (%d,%d): %d %d want %d %d", x, y, uv[0], uv[1],
++                      pattern(1, sx, sy), pattern(2, sx, sy));
++                bad++;
++            }
++        }
++
++p010:
++    av_frame_free(&f);
++    av_free(buf);
++
++    /* yuv420p10 -> P010 */
++    {
++        const int pw = 720, ph = 576, pbpl = 1536;
++        AVFrame *g = av_frame_alloc();
++        size_t plen = (size_t)pbpl * ph * 3 / 2;
++        uint8_t *pbuf = av_mallocz(plen), *pdst[1] = { pbuf };
++        int pb = pbpl;
++
++        if (!g || !pbuf)
++            goto end;
++        g->format = AV_PIX_FMT_YUV420P10LE;
++        g->width  = pw;
++        g->height = ph;
++        if (av_frame_get_buffer(g, 64) < 0)
++            goto end;
++        for (y = 0; y < ph; y++)
++            for (x = 0; x < pw; x++)
++                AV_WL16(g->data[0] + y * g->linesize[0] + 2 * x, (x * 3 + y) & 1023);
++        for (y = 0; y < ph / 2; y++)
++            for (x = 0; x < pw / 2; x++) {
++                AV_WL16(g->data[1] + y * g->linesize[1] + 2 * x, (x + 5 * y) & 1023);
++                AV_WL16(g->data[2] + y * g->linesize[2] + 2 * x, (7 * x + y) & 1023);
++            }
++        CHECK(!ff_v4l2_enc_copy_frame(g, AV_PIX_FMT_P010LE, pdst, &plen, &pb, 1, pw, ph, used),
++              "yuv420p10->p010 failed");
++        bad = 0;
++        for (y = 0; y < ph && !bad; y++)
++            for (x = 0; x < pw && !bad; x++)
++                bad |= AV_RL16(pbuf + y * pbpl + 2 * x) != (((x * 3 + y) & 1023) << 6);
++        for (y = 0; y < ph / 2 && !bad; y++)
++            for (x = 0; x < pw / 2 && !bad; x++) {
++                const uint8_t *uv = pbuf + pbpl * ph + y * pbpl + 4 * x;
++                bad |= AV_RL16(uv)     != (((x + 5 * y) & 1023) << 6) ||
++                       AV_RL16(uv + 2) != (((7 * x + y) & 1023) << 6);
++            }
++        CHECK(!bad, "p010 sample wrong at (%d,%d)", x, y);
++end:
++        av_frame_free(&g);
++        av_free(pbuf);
++    }
++}
++
++/*
++ * An emulation of a reordering encoder: the B-frame planner of the Apple AVE
++ * V4L2 driver (ave_gop.h), fed frames in presentation order. It holds up to
++ * nb frames as B frames until their anchor (a P) arrives, then codes the
++ * group anchor first; an IDR (the first frame, every gop frames) first
++ * closes the held frames as Bs + a P. With know_last the driver learns
++ * which frame is the last when it arrives (the last is an anchor);
++ * otherwise the drain closes what it holds. order[] gets each group's
++ * frames in decode order; shuffle permutes every group at random instead,
++ * which the DTS must also survive.
++ */
++typedef struct Emu {
++    int nb, gop, know_last, shuffle;
++    int held[8], n_held, dist, started;
++    int order[4096], n_order;
++    int groups[4096], n_groups;  /* order index where each group ends */
++    unsigned rnd;
++} Emu;
++
++static unsigned emu_rand(Emu *e)
++{
++    e->rnd = e->rnd * 1664525u + 1013904223u;
++    return e->rnd >> 8;
++}
++
++static void emu_group(Emu *e, const int *frames, int n)
++{
++    int i, start = e->n_order;
++
++    for (i = 0; i < n; i++)
++        e->order[e->n_order++] = frames[i];
++    if (e->shuffle) {
++        for (i = n - 1; i > 0; i--) {
++            int j = emu_rand(e) % (i + 1), t = e->order[start + i];
++            e->order[start + i] = e->order[start + j];
++            e->order[start + j] = t;
++        }
++    }
++    e->groups[e->n_groups++] = e->n_order;
++}
++
++/* held Bs and their P: the P (the newest) first, then the Bs */
++static void emu_close(Emu *e, int with_new, int new_frame)
++{
++    int g[8], n = 0, i;
++
++    if (with_new) {
++        g[n++] = new_frame;
++        for (i = 0; i < e->n_held; i++)
++            g[n++] = e->held[i];
++    } else if (e->n_held) {
++        g[n++] = e->held[e->n_held - 1];
++        for (i = 0; i < e->n_held - 1; i++)
++            g[n++] = e->held[i];
++    }
++    if (n)
++        emu_group(e, g, n);
++    e->n_held = 0;
++}
++
++static void emu_frame(Emu *e, int f, int last)
++{
++    if (!e->started || (e->gop && e->dist >= e->gop)) {
++        emu_close(e, 0, 0);
++        emu_group(e, &f, 1);              /* the IDR, alone */
++        e->started = 1;
++        e->dist = 1;
++    } else if ((last && e->know_last) || e->n_held >= e->nb ||
++               (e->gop && e->dist + 1 >= e->gop)) {
++        emu_close(e, 1, f);
++        e->dist++;
++    } else {
++        e->held[e->n_held++] = f;
++        e->dist++;
++    }
++}
++
++/*
++ * Run n frames through the emulation and the DTS derivation; return the
++ * number of packets whose DTS is above their PTS or not above the previous
++ * DTS (reported unless quiet), or -1 on a bookkeeping failure.
++ */
++static int run_dts(int nb, int delay, int gop, int n, int know_last, int shuffle,
++                   int vfr, int64_t start, int quiet)
++{
++    Emu e = { .nb = nb, .gop = gop, .know_last = know_last, .shuffle = shuffle,
++              .rnd = 12345u + n * 7u + gop };
++    V4L2EncTimestamps ts = { 0 };
++    int64_t pts[4096], prev_dts = INT64_MIN;
++    int i, g = 0, out = 0, bad = 0;
++
++    pts[0] = start;
++    for (i = 1; i < n; i++)
++        pts[i] = pts[i - 1] + (vfr ? 1 + emu_rand(&e) % 5 : 3);
++
++    if (ff_v4l2_enc_ts_init(&ts, delay, 3) < 0)
++        return -1;
++    for (i = 0; i < n; i++) {
++        emu_frame(&e, i, i == n - 1);
++        if (i == n - 1)
++            emu_close(&e, 0, 0);          /* the drain */
++        if (ff_v4l2_enc_ts_push(&ts, pts[i]) < 0)
++            goto fail;
++        /* the packets of every group complete so far come back now */
++        for (; g < e.n_groups; g++) {
++            for (; out < e.groups[g]; out++) {
++                int64_t dts, p = pts[e.order[out]];
++
++                if (ff_v4l2_enc_ts_next_dts(&ts, &dts) < 0)
++                    goto fail;
++                if (dts > p || dts <= prev_dts || (!delay && dts != p)) {
++                    if (!quiet && bad < 3)
++                        CHECK(0, "nb %d delay %d gop %d n %d last %d shuffle %d: packet %d "
++                              "(frame %d) PTS %"PRId64" DTS %"PRId64" previous DTS %"PRId64,
++                              nb, delay, gop, n, know_last, shuffle, out, e.order[out],
++                              p, dts, prev_dts);
++                    bad++;
++                }
++                prev_dts = dts;
++            }
++        }
++        /* never more than the held B frames in flight */
++        if (ff_v4l2_enc_ts_in_flight(&ts) > nb)
++            goto fail;
++    }
++    if (out != n || ff_v4l2_enc_ts_in_flight(&ts))
++        goto fail;
++    ff_v4l2_enc_ts_uninit(&ts);
++    return bad;
++fail:
++    ff_v4l2_enc_ts_uninit(&ts);
++    return -1;
++}
++
++static void test_dts(void)
++{
++    static const int gops[]     = { 0, 1, 2, 3, 4, 5, 12, 250 };
++    static const int counts[]   = { 1, 2, 3, 4, 7, 60, 1000 };
++    static const int64_t starts[] = { 0, -7, 90000 };
++    int nb, gi, ci, si, last, shuffle, vfr, ret, control = 0;
++
++    for (nb = 0; nb <= 2; nb++)
++        for (gi = 0; gi < FF_ARRAY_ELEMS(gops); gi++)
++            for (ci = 0; ci < FF_ARRAY_ELEMS(counts); ci++)
++                for (last = 0; last <= 1; last++)
++                    for (shuffle = 0; shuffle <= 1; shuffle++)
++                        for (vfr = 0; vfr <= 1; vfr++) {
++                            for (si = 0; si < FF_ARRAY_ELEMS(starts); si++) {
++                                ret = run_dts(nb, nb, gops[gi], counts[ci], last,
++                                              shuffle, vfr, starts[si], 0);
++                                CHECK(ret == 0, "nb %d gop %d n %d: %d bad DTS",
++                                      nb, gops[gi], counts[ci], ret);
++                            }
++                            /* the driver may code fewer B frames than it accepted */
++                            ret = run_dts(nb, 2, gops[gi], counts[ci], last,
++                                          shuffle, vfr, 0, 0);
++                            CHECK(ret == 0, "nb %d delay 2: %d bad DTS", nb, ret);
++                            /* control: B frames without a reorder delay must fail
++                             * (unshuffled: a shuffle may put a group back in order) */
++                            if (nb && !shuffle && counts[ci] >= 7 && gops[gi] != 1 && gops[gi] != 2) {
++                                ret = run_dts(nb, 0, gops[gi], counts[ci], last,
++                                              shuffle, vfr, 0, 1);
++                                CHECK(ret > 0, "control passed: nb %d delay 0 gop %d n %d",
++                                      nb, gops[gi], counts[ci]);
++                                control++;
++                            }
++                        }
++    CHECK(control > 0, "no control ran");
++
++    /* delay 1 is exact for anchor-first groups (x264's has_b_frames without pyramid) */
++    for (nb = 1; nb <= 2; nb++) {
++        ret = run_dts(nb, 1, 250, 1000, 0, 0, 0, 0, 0);
++        CHECK(ret == 0, "nb %d delay 1, anchor first: %d bad DTS", nb, ret);
++    }
++
++    /* the exact sequence for B=1: I0 P2 B1 P4 B3 ... */
++    {
++        V4L2EncTimestamps ts = { 0 };
++        static const int order[] = { 0, 2, 1, 4, 3, 5 };
++        static const int64_t want[] = { -1, 0, 1, 2, 3, 4 };
++        int64_t dts;
++        int i;
++
++        ff_v4l2_enc_ts_init(&ts, 1, 1);
++        for (i = 0; i < 6; i++)
++            ff_v4l2_enc_ts_push(&ts, i);
++        for (i = 0; i < 6; i++) {
++            ff_v4l2_enc_ts_next_dts(&ts, &dts);
++            CHECK(dts == want[i] && dts <= order[i], "B=1 packet %d: DTS %"PRId64, i, dts);
++        }
++        ff_v4l2_enc_ts_uninit(&ts);
++    }
++}
++
++static void test_has_picture(void)
++{
++    static const uint8_t h264_hdr[] = { 0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0, 0, 1, 0x68, 0xee, 0x3c, 0x80 };
++    static const uint8_t h264_idr[] = { 0, 0, 0, 1, 0x67, 0x64, 0, 0, 0, 1, 0x68, 0xee,
++                                        0, 0, 1, 0x65, 0x88, 0x84, 0x00 };
++    static const uint8_t h264_b[]   = { 0, 0, 0, 1, 0x01, 0x9e, 0x12 };
++    static const uint8_t hevc_hdr[] = { 0, 0, 0, 1, 0x40, 0x01, 0x0c, 0, 0, 0, 1, 0x42, 0x01, 0x01,
++                                        0, 0, 0, 1, 0x44, 0x01, 0xc1, 0, 0, 0, 1, 0x4e, 0x01, 0x05 };
++    static const uint8_t hevc_idr[] = { 0, 0, 0, 1, 0x40, 0x01, 0x0c, 0, 0, 0, 1, 0x26, 0x01, 0xaf };
++    static const uint8_t hevc_trail[] = { 0, 0, 1, 0x02, 0x01, 0xd0, 0x00, 0x00 };
++
++    CHECK(!ff_v4l2_enc_has_picture(AV_CODEC_ID_H264, h264_hdr, sizeof(h264_hdr)), "h264 hdr");
++    CHECK(ff_v4l2_enc_has_picture(AV_CODEC_ID_H264, h264_idr, sizeof(h264_idr)), "h264 idr");
++    CHECK(ff_v4l2_enc_has_picture(AV_CODEC_ID_H264, h264_b, sizeof(h264_b)), "h264 b");
++    CHECK(!ff_v4l2_enc_has_picture(AV_CODEC_ID_HEVC, hevc_hdr, sizeof(hevc_hdr)), "hevc hdr");
++    CHECK(ff_v4l2_enc_has_picture(AV_CODEC_ID_HEVC, hevc_idr, sizeof(hevc_idr)), "hevc idr");
++    CHECK(ff_v4l2_enc_has_picture(AV_CODEC_ID_HEVC, hevc_trail, sizeof(hevc_trail)), "hevc trail");
++    CHECK(ff_v4l2_enc_has_picture(AV_CODEC_ID_VP8, h264_hdr, sizeof(h264_hdr)), "vp8");
++
++}
++
++static void test_paramsets(void)
++{
++    /* AUD, SPS, PPS, SEI, IDR slice; 3- and 4-byte start codes, trailing zeros */
++    static const uint8_t h264[] = { 0, 0, 0, 1, 0x09, 0x10,
++                                    0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0xac, 0x00,
++                                    0, 0, 1, 0x68, 0xee, 0x3c, 0x80,
++                                    0, 0, 1, 0x06, 0x05, 0x01, 0x80,
++                                    0, 0, 1, 0x65, 0x88, 0x84, 0x00, 0x21 };
++    static const uint8_t h264_want[] = { 0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0xac,
++                                         0, 0, 0, 1, 0x68, 0xee, 0x3c, 0x80 };
++    /* VPS, SPS, PPS, prefix SEI, IDR_W_RADL; an SPS-like byte pattern in the slice */
++    static const uint8_t hevc[] = { 0, 0, 0, 1, 0x40, 0x01, 0x0c, 0x01,
++                                    0, 0, 0, 1, 0x42, 0x01, 0x01, 0x01,
++                                    0, 0, 0, 1, 0x44, 0x01, 0xc1, 0x72,
++                                    0, 0, 0, 1, 0x4e, 0x01, 0x05, 0xff,
++                                    0, 0, 0, 1, 0x26, 0x01, 0xaf, 0x00, 0x00, 0x03, 0x42 };
++    static const uint8_t hevc_want[] = { 0, 0, 0, 1, 0x40, 0x01, 0x0c, 0x01,
++                                         0, 0, 0, 1, 0x42, 0x01, 0x01, 0x01,
++                                         0, 0, 0, 1, 0x44, 0x01, 0xc1, 0x72 };
++    static const uint8_t no_pps[] = { 0, 0, 0, 1, 0x67, 0x64, 0, 0, 1, 0x65, 0x88 };
++    uint8_t *out = NULL;
++    int size = 0, ret, i, pad = 1;
++
++    ret = ff_v4l2_enc_extract_paramsets(AV_CODEC_ID_H264, h264, sizeof(h264), &out, &size);
++    CHECK(ret == 0 && size == sizeof(h264_want) && !memcmp(out, h264_want, size),
++          "h264 parameter sets: ret %d size %d", ret, size);
++    for (i = 0; ret == 0 && i < AV_INPUT_BUFFER_PADDING_SIZE; i++)
++        pad &= !out[size + i];
++    CHECK(pad, "h264 extradata padding");
++    av_freep(&out);
++
++    ret = ff_v4l2_enc_extract_paramsets(AV_CODEC_ID_HEVC, hevc, sizeof(hevc), &out, &size);
++    CHECK(ret == 0 && size == sizeof(hevc_want) && !memcmp(out, hevc_want, size),
++          "hevc parameter sets: ret %d size %d", ret, size);
++    av_freep(&out);
++
++    ret = ff_v4l2_enc_extract_paramsets(AV_CODEC_ID_H264, no_pps, sizeof(no_pps), &out, &size);
++    CHECK(ret == AVERROR_INVALIDDATA && !out, "h264 without a PPS: ret %d", ret);
++    /* the HEVC stream has no H.264 SPS/PPS: control */
++    ret = ff_v4l2_enc_extract_paramsets(AV_CODEC_ID_H264, hevc, sizeof(hevc), &out, &size);
++    CHECK(ret == AVERROR_INVALIDDATA, "hevc data as h264: ret %d", ret);
++    av_freep(&out);
++}
++
++int main(void)
++{
++    test_paramsets();
++    test_copy();
++    test_convert();
++    test_dts();
++    test_has_picture();
++
++    if (failures) {
++        fprintf(stderr, "%d failure(s)\n", failures);
++        return 1;
++    }
++    printf("v4l2_enc_utils: all tests passed\n");
++    return 0;
++}
+diff --git a/libavcodec/v4l2_buffers.c b/libavcodec/v4l2_buffers.c
+index f96c267..49e5dab 100644
+--- a/libavcodec/v4l2_buffers.c
++++ b/libavcodec/v4l2_buffers.c
+@@ -31,8 +31,10 @@
+ #include "libavutil/attributes.h"
+ #include "libavutil/pixdesc.h"
+ #include "libavutil/refstruct.h"
++#include "encode.h"
+ #include "v4l2_context.h"
+ #include "v4l2_buffers.h"
++#include "v4l2_enc_utils.h"
+ #include "v4l2_m2m.h"
+ 
+ #ifndef USEC_PER_SEC
+@@ -362,64 +364,44 @@ static int v4l2_buffer_buf_to_swframe(AVFrame *frame, V4L2Buffer *avbuf)
+ 
+ static int v4l2_buffer_swframe_to_buf(const AVFrame *frame, V4L2Buffer *out)
+ {
++    const struct v4l2_format *fmt = &out->context->format;
++    const int mplane = V4L2_TYPE_IS_MULTIPLANAR(fmt->type);
++    const int width  = mplane ? fmt->fmt.pix_mp.width  : fmt->fmt.pix.width;
++    const int height = mplane ? fmt->fmt.pix_mp.height : fmt->fmt.pix.height;
++    uint8_t *dst[VIDEO_MAX_PLANES];
++    size_t len[VIDEO_MAX_PLANES], used[VIDEO_MAX_PLANES] = { 0 };
++    int bpl[VIDEO_MAX_PLANES];
+     int i, ret;
+-    struct v4l2_format fmt = out->context->format;
+-    int pixel_format = V4L2_TYPE_IS_MULTIPLANAR(fmt.type) ?
+-                       fmt.fmt.pix_mp.pixelformat : fmt.fmt.pix.pixelformat;
+-    int height       = V4L2_TYPE_IS_MULTIPLANAR(fmt.type) ?
+-                       fmt.fmt.pix_mp.height : fmt.fmt.pix.height;
+-    int is_planar_format = 0;
+-
+-    switch (pixel_format) {
+-    case V4L2_PIX_FMT_YUV420M:
+-    case V4L2_PIX_FMT_YVU420M:
+-#ifdef V4L2_PIX_FMT_YUV422M
+-    case V4L2_PIX_FMT_YUV422M:
+-#endif
+-#ifdef V4L2_PIX_FMT_YVU422M
+-    case V4L2_PIX_FMT_YVU422M:
+-#endif
+-#ifdef V4L2_PIX_FMT_YUV444M
+-    case V4L2_PIX_FMT_YUV444M:
+-#endif
+-#ifdef V4L2_PIX_FMT_YVU444M
+-    case V4L2_PIX_FMT_YVU444M:
+-#endif
+-    case V4L2_PIX_FMT_NV12M:
+-    case V4L2_PIX_FMT_NV21M:
+-    case V4L2_PIX_FMT_NV12MT_16X16:
+-    case V4L2_PIX_FMT_NV12MT:
+-    case V4L2_PIX_FMT_NV16M:
+-    case V4L2_PIX_FMT_NV61M:
+-        is_planar_format = 1;
+-    }
+ 
+-    if (!is_planar_format) {
+-        const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(frame->format);
+-        int planes_nb = 0;
+-        int offset = 0;
+-
+-        for (i = 0; i < desc->nb_components; i++)
+-            planes_nb = FFMAX(planes_nb, desc->comp[i].plane + 1);
++    for (i = 0; i < out->num_planes; i++) {
++        dst[i] = out->plane_info[i].mm_addr;
++        len[i] = out->plane_info[i].length;
++        bpl[i] = out->plane_info[i].bytesperline;
++    }
+ 
+-        for (i = 0; i < planes_nb; i++) {
+-            int size, h = height;
+-            if (i == 1 || i == 2) {
+-                h = AV_CEIL_RSHIFT(h, desc->log2_chroma_h);
+-            }
+-            size = frame->linesize[i] * h;
+-            ret = v4l2_bufref_to_buf(out, 0, frame->data[i], size, offset);
+-            if (ret)
+-                return ret;
+-            offset += size;
+-        }
+-        return 0;
++    /*
++     * The driver's line stride (bytesperline) and height, not the frame's:
++     * drivers round both up, and the chroma plane of a single-planar format
++     * starts at bytesperline * height.
++     */
++    ret = ff_v4l2_enc_copy_frame(frame, out->context->av_pix_fmt, dst, len, bpl,
++                                 out->num_planes, width, height, used);
++    if (ret < 0) {
++        av_log(logger(out), AV_LOG_ERROR, "%s: cannot copy a %s %dx%d frame into a "
++               "%dx%d buffer: %s\n", out->context->name,
++               av_get_pix_fmt_name(frame->format) ?: "unknown",
++               frame->width, frame->height, width, height, av_err2str(ret));
++        return ret;
+     }
+ 
+     for (i = 0; i < out->num_planes; i++) {
+-        ret = v4l2_bufref_to_buf(out, i, frame->buf[i]->data, frame->buf[i]->size, 0);
+-        if (ret)
+-            return ret;
++        if (mplane) {
++            out->planes[i].bytesused = used[i];
++            out->planes[i].length    = len[i];
++        } else {
++            out->buf.bytesused = used[0];
++            out->buf.length    = len[0];
++        }
+     }
+ 
+     return 0;
+@@ -476,27 +458,68 @@ int ff_v4l2_buffer_buf_to_avframe(AVFrame *frame, V4L2Buffer *avbuf)
+ 
+ int ff_v4l2_buffer_buf_to_avpkt(AVPacket *pkt, V4L2Buffer *avbuf)
+ {
+-    int ret;
++    V4L2m2mContext *s = buf_to_m2mctx(avbuf);
++    const int mplane = V4L2_TYPE_IS_MULTIPLANAR(avbuf->buf.type);
++    const unsigned offset = mplane ? avbuf->buf.m.planes[0].data_offset : 0;
++    const unsigned used = mplane ? avbuf->buf.m.planes[0].bytesused : avbuf->buf.bytesused;
++    enum AVPictureType pict_type = AV_PICTURE_TYPE_NONE;
++    int ret, err;
+ 
+     av_packet_unref(pkt);
+-    ret = v4l2_buf_to_bufref(avbuf, 0, &pkt->buf);
+-    if (ret)
+-        return ret;
+ 
+-    pkt->size = V4L2_TYPE_IS_MULTIPLANAR(avbuf->buf.type) ? avbuf->buf.m.planes[0].bytesused : avbuf->buf.bytesused;
+-    pkt->data = pkt->buf->data;
++    /*
++     * Copy the packet out and give the buffer straight back to the driver:
++     * a packet can stay with the caller (a muxer's interleaving queue) for a
++     * long time, and an encoder that reorders needs several CAPTURE buffers
++     * at once to code a group of frames.
++     */
++    if (used < offset || used - offset > avbuf->plane_info[0].length) {
++        av_log(logger(avbuf), AV_LOG_ERROR, "%s: bad payload %u at %u\n",
++               avbuf->context->name, used, offset);
++        ret = AVERROR(EINVAL);
++    } else {
++        ret = av_new_packet(pkt, used - offset);
++        if (!ret)
++            memcpy(pkt->data, (uint8_t *)avbuf->plane_info[0].mm_addr + offset, used - offset);
++    }
+ 
+-    if (avbuf->buf.flags & V4L2_BUF_FLAG_KEYFRAME)
+-        pkt->flags |= AV_PKT_FLAG_KEY;
++    if (ret >= 0) {
++        if (avbuf->buf.flags & V4L2_BUF_FLAG_KEYFRAME) {
++            pkt->flags |= AV_PKT_FLAG_KEY;
++            pict_type = AV_PICTURE_TYPE_I;
++        } else if (avbuf->buf.flags & V4L2_BUF_FLAG_BFRAME) {
++            pict_type = AV_PICTURE_TYPE_B;
++        } else if (avbuf->buf.flags & V4L2_BUF_FLAG_PFRAME) {
++            pict_type = AV_PICTURE_TYPE_P;
++        }
+ 
+-    if (avbuf->buf.flags & V4L2_BUF_FLAG_ERROR) {
+-        av_log(logger(avbuf), AV_LOG_ERROR, "%s driver encode error\n", avbuf->context->name);
+-        pkt->flags |= AV_PKT_FLAG_CORRUPT;
++        if (avbuf->buf.flags & V4L2_BUF_FLAG_ERROR) {
++            av_log(logger(avbuf), AV_LOG_ERROR, "%s driver encode error\n", avbuf->context->name);
++            pkt->flags |= AV_PKT_FLAG_CORRUPT;
++        }
++
++        pkt->dts = pkt->pts = v4l2_get_pts(avbuf);
++
++        if (pict_type != AV_PICTURE_TYPE_NONE) {
++            int qp = s->enc_qp[pict_type == AV_PICTURE_TYPE_I ? 0 :
++                               pict_type == AV_PICTURE_TYPE_P ? 1 : 2];
++            if (qp >= 0)
++                ff_encode_add_stats_side_data(pkt, qp * FF_QP2LAMBDA, NULL, 0, pict_type);
++        }
++    }
++
++    if (avbuf->context->streamon) {
++        err = ff_v4l2_buffer_enqueue(avbuf);
++        if (err < 0) {
++            av_log(logger(avbuf), AV_LOG_ERROR, "%s: cannot requeue buffer %d: %s\n",
++                   avbuf->context->name, avbuf->buf.index, av_err2str(err));
++        }
+     }
+ 
+-    pkt->dts = pkt->pts = v4l2_get_pts(avbuf);
++    if (ret < 0)
++        av_packet_unref(pkt);
+ 
+-    return 0;
++    return ret;
+ }
+ 
+ int ff_v4l2_buffer_avpkt_to_buf(const AVPacket *pkt, V4L2Buffer *out)
+diff --git a/libavcodec/v4l2_enc_utils.c b/libavcodec/v4l2_enc_utils.c
+new file mode 100644
+index 0000000..60b6528
+--- /dev/null
++++ b/libavcodec/v4l2_enc_utils.c
+@@ -0,0 +1,444 @@
++/*
++ * V4L2 mem2mem encoder helpers that do not touch the device
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include <string.h>
++
++#include "libavutil/common.h"
++#include "libavutil/error.h"
++#include "libavutil/fifo.h"
++#include "libavutil/imgutils.h"
++#include "libavutil/intreadwrite.h"
++#include "libavutil/mem.h"
++#include "libavutil/pixdesc.h"
++
++#include "defs.h"
++#include "v4l2_enc_utils.h"
++
++#define V4L2_ENC_MAX_PLANES 4
++
++typedef struct V4L2EncPlane {
++    uint8_t *data;
++    int stride;     /* bytes from one line to the next */
++    int rows;       /* lines in the format */
++    int bytes;      /* bytes of a line that the format's width covers */
++    int group;      /* bytes of one sample position (0: do not pad columns) */
++} V4L2EncPlane;
++
++static int plane_components(const AVPixFmtDescriptor *desc, int plane)
++{
++    int i, n = 0;
++
++    for (i = 0; i < desc->nb_components; i++)
++        n += desc->comp[i].plane == plane;
++    return n;
++}
++
++static int is_chroma_plane(int plane)
++{
++    return plane == 1 || plane == 2;
++}
++
++static int v4l2_enc_layout(enum AVPixelFormat fmt,
++                           uint8_t *const dst[], const size_t dst_len[],
++                           const int bytesperline[], int nb_mem_planes,
++                           int width, int height,
++                           V4L2EncPlane pl[V4L2_ENC_MAX_PLANES],
++                           size_t bytesused[])
++{
++    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(fmt);
++    int nb_planes = av_pix_fmt_count_planes(fmt);
++    size_t offset = 0;
++    int p;
++
++    if (!desc || (desc->flags & AV_PIX_FMT_FLAG_HWACCEL) ||
++        nb_planes <= 0 || nb_planes > V4L2_ENC_MAX_PLANES ||
++        width <= 0 || height <= 0)
++        return AVERROR(EINVAL);
++    if (nb_mem_planes != 1 && nb_mem_planes != nb_planes)
++        return AVERROR(EINVAL);
++
++    for (p = 0; p < nb_planes; p++) {
++        const int mp = nb_mem_planes > 1 ? p : 0;
++        const int chroma = is_chroma_plane(p);
++        int stride, bytes = av_image_get_linesize(fmt, width, p);
++
++        if (bytes < 0)
++            return bytes;
++
++        if (nb_mem_planes > 1) {
++            offset = 0;
++            stride = bytesperline[mp] > 0 ? bytesperline[mp] : bytes;
++        } else if (p == 0) {
++            stride = bytesperline[0] > 0 ? bytesperline[0] : bytes;
++        } else {
++            /*
++             * A plane that follows plane 0 in the same memory: its line
++             * length follows from plane 0's as the V4L2 specification
++             * derives it (NV12: the same, YUV420: half, P010: the same).
++             */
++            const int luma = bytesperline[0] > 0 ? bytesperline[0] :
++                             av_image_get_linesize(fmt, width, 0);
++            stride = (int)(((int64_t)luma * plane_components(desc, p) /
++                            FFMAX(plane_components(desc, 0), 1)) >>
++                           (chroma ? desc->log2_chroma_w : 0));
++        }
++        if (stride < bytes)
++            return AVERROR(EINVAL);
++
++        pl[p].data   = dst[mp] + offset;
++        pl[p].stride = stride;
++        pl[p].rows   = chroma ? AV_CEIL_RSHIFT(height, desc->log2_chroma_h) : height;
++        pl[p].bytes  = bytes;
++        pl[p].group  = nb_planes > 1 ?
++                       av_image_get_linesize(fmt, chroma ? 1 << desc->log2_chroma_w : 1, p) : 0;
++
++        if (offset > dst_len[mp] ||
++            (size_t)pl[p].stride * pl[p].rows > dst_len[mp] - offset)
++            return AVERROR(ENOSPC);
++
++        offset += (size_t)pl[p].stride * pl[p].rows;
++        bytesused[mp] = offset;
++    }
++
++    return nb_planes;
++}
++
++/* Repeat the last column and line of the picture into the format's padding. */
++static void v4l2_enc_pad_plane(const V4L2EncPlane *pl, int vis_bytes, int vis_rows)
++{
++    int x, y;
++
++    if (vis_rows <= 0 || vis_bytes <= 0)
++        return;
++
++    if (pl->group > 0 && vis_bytes >= pl->group && vis_bytes < pl->bytes) {
++        for (y = 0; y < vis_rows; y++) {
++            uint8_t *row = pl->data + (size_t)y * pl->stride;
++            const uint8_t *last = row + vis_bytes - pl->group;
++
++            for (x = vis_bytes; x + pl->group <= pl->bytes; x += pl->group)
++                memcpy(row + x, last, pl->group);
++        }
++    }
++
++    for (y = vis_rows; y < pl->rows; y++)
++        memcpy(pl->data + (size_t)y * pl->stride,
++               pl->data + (size_t)(vis_rows - 1) * pl->stride, pl->bytes);
++}
++
++int ff_v4l2_enc_can_convert(enum AVPixelFormat src, enum AVPixelFormat dst)
++{
++    if (src == dst)
++        return 1;
++    switch (src) {
++    case AV_PIX_FMT_YUV420P:
++        return dst == AV_PIX_FMT_NV12 || dst == AV_PIX_FMT_NV21;
++    case AV_PIX_FMT_YUV420P10LE:
++        return dst == AV_PIX_FMT_P010LE;
++    default:
++        return 0;
++    }
++}
++
++enum AVPixelFormat ff_v4l2_enc_request_fmt(enum AVPixelFormat src)
++{
++    /* 10-bit 4:2:0 has no V4L2 format of its own; P010 holds it as is */
++    return src == AV_PIX_FMT_YUV420P10LE ? AV_PIX_FMT_P010LE : src;
++}
++
++/* Planar 4:2:0 into the semi-planar layout: the same luma, interleaved chroma. */
++static void v4l2_enc_convert(const AVFrame *src, enum AVPixelFormat dst_fmt,
++                             const V4L2EncPlane pl[], int w, int h)
++{
++    const int cw = AV_CEIL_RSHIFT(w, 1), ch = AV_CEIL_RSHIFT(h, 1);
++    const int swap = dst_fmt == AV_PIX_FMT_NV21;
++    int x, y;
++
++    if (dst_fmt == AV_PIX_FMT_P010LE) {
++        /* P010: the 10 bits sit at the top of each 16-bit sample */
++        for (y = 0; y < h; y++) {
++            const uint8_t *s = src->data[0] + (ptrdiff_t)y * src->linesize[0];
++            uint8_t *d = pl[0].data + (size_t)y * pl[0].stride;
++
++            for (x = 0; x < w; x++)
++                AV_WL16(d + 2 * x, AV_RL16(s + 2 * x) << 6);
++        }
++        for (y = 0; y < ch; y++) {
++            const uint8_t *u = src->data[1] + (ptrdiff_t)y * src->linesize[1];
++            const uint8_t *v = src->data[2] + (ptrdiff_t)y * src->linesize[2];
++            uint8_t *d = pl[1].data + (size_t)y * pl[1].stride;
++
++            for (x = 0; x < cw; x++) {
++                AV_WL16(d + 4 * x,     AV_RL16(u + 2 * x) << 6);
++                AV_WL16(d + 4 * x + 2, AV_RL16(v + 2 * x) << 6);
++            }
++        }
++        return;
++    }
++
++    av_image_copy_plane(pl[0].data, pl[0].stride, src->data[0], src->linesize[0], w, h);
++    for (y = 0; y < ch; y++) {
++        const uint8_t *u = src->data[swap ? 2 : 1] + (ptrdiff_t)y * src->linesize[swap ? 2 : 1];
++        const uint8_t *v = src->data[swap ? 1 : 2] + (ptrdiff_t)y * src->linesize[swap ? 1 : 2];
++        uint8_t *d = pl[1].data + (size_t)y * pl[1].stride;
++
++        for (x = 0; x < cw; x++) {
++            d[2 * x]     = u[x];
++            d[2 * x + 1] = v[x];
++        }
++    }
++}
++
++int ff_v4l2_enc_copy_frame(const AVFrame *src, enum AVPixelFormat dst_fmt,
++                           uint8_t *const dst[], const size_t dst_len[],
++                           const int bytesperline[], int nb_mem_planes,
++                           int fmt_width, int fmt_height, size_t bytesused[])
++{
++    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(dst_fmt);
++    V4L2EncPlane pl[V4L2_ENC_MAX_PLANES];
++    const int w = FFMIN(src->width,  fmt_width);
++    const int h = FFMIN(src->height, fmt_height);
++    const int convert = src->format != dst_fmt;
++    int p, nb_planes;
++
++    if (!ff_v4l2_enc_can_convert(src->format, dst_fmt) || w <= 0 || h <= 0)
++        return AVERROR(EINVAL);
++
++    nb_planes = v4l2_enc_layout(dst_fmt, dst, dst_len, bytesperline,
++                                nb_mem_planes, fmt_width, fmt_height,
++                                pl, bytesused);
++    if (nb_planes < 0)
++        return nb_planes;
++
++    if (convert) {
++        if (!src->data[0] || !src->data[1] || !src->data[2])
++            return AVERROR(EINVAL);
++        v4l2_enc_convert(src, dst_fmt, pl, w, h);
++    }
++
++    for (p = 0; p < nb_planes; p++) {
++        const int rows  = is_chroma_plane(p) ? AV_CEIL_RSHIFT(h, desc->log2_chroma_h) : h;
++        const int bytes = av_image_get_linesize(dst_fmt, w, p);
++
++        if (bytes < 0)
++            return AVERROR(EINVAL);
++
++        if (!convert) {
++            if (!src->data[p])
++                return AVERROR(EINVAL);
++            av_image_copy_plane(pl[p].data, pl[p].stride,
++                                src->data[p], src->linesize[p], bytes, rows);
++        }
++        v4l2_enc_pad_plane(&pl[p], bytes, rows);
++    }
++
++    return 0;
++}
++
++/*
++ * Timestamps of a device that reorders: frames go in in presentation
++ * order, packets come out in decode order, each with its own frame's PTS.
++ */
++int ff_v4l2_enc_ts_init(V4L2EncTimestamps *ts, int delay, int64_t step)
++{
++    ff_v4l2_enc_ts_uninit(ts);
++    ts->pts = av_fifo_alloc2(16, sizeof(int64_t), AV_FIFO_FLAG_AUTO_GROW);
++    if (!ts->pts)
++        return AVERROR(ENOMEM);
++    ts->delay = FFMAX(delay, 0);
++    ts->step  = FFMAX(step, 1);
++    return 0;
++}
++
++void ff_v4l2_enc_ts_uninit(V4L2EncTimestamps *ts)
++{
++    av_fifo_freep2(&ts->pts);
++    ts->nb_in = ts->nb_out = 0;
++}
++
++int ff_v4l2_enc_ts_push(V4L2EncTimestamps *ts, int64_t pts)
++{
++    int ret = av_fifo_write(ts->pts, &pts, 1);
++
++    if (ret < 0)
++        return ret;
++    ts->nb_in++;
++    return 0;
++}
++
++int ff_v4l2_enc_ts_next_dts(V4L2EncTimestamps *ts, int64_t *dts)
++{
++    int64_t pts;
++    int ret;
++
++    /*
++     * Packet n gets the PTS of frame n - delay. With at most `delay` frames
++     * between a frame's position in presentation order and its position in
++     * decode order, that is never later than the packet's own PTS, and it
++     * rises with n. The first `delay` packets have no such frame: they get
++     * the first PTS minus whole frame durations.
++     */
++    if (ts->nb_out < ts->delay) {
++        ret = av_fifo_peek(ts->pts, &pts, 1, 0);
++        if (ret < 0)
++            return ret;
++        *dts = pts == AV_NOPTS_VALUE ? AV_NOPTS_VALUE :
++               pts - (ts->delay - ts->nb_out) * ts->step;
++    } else {
++        ret = av_fifo_read(ts->pts, &pts, 1);
++        if (ret < 0)
++            return ret;
++        *dts = pts;
++    }
++    ts->nb_out++;
++    return 0;
++}
++
++/* The next Annex B start code (00 00 01) at or after p, or end. */
++static const uint8_t *v4l2_enc_find_startcode(const uint8_t *p, const uint8_t *end)
++{
++    for (; end - p >= 3; p++)
++        if (!p[0] && !p[1] && p[2] == 1)
++            return p;
++    return end;
++}
++
++/*
++ * Call cb for every NAL unit of an Annex B buffer; nal points at the NAL
++ * header, size excludes the start code and any trailing zero bytes. Stops
++ * when cb returns non-zero and returns that value.
++ */
++static int v4l2_enc_for_each_nal(const uint8_t *data, int size,
++                                 int (*cb)(void *opaque, const uint8_t *nal, int size),
++                                 void *opaque)
++{
++    const uint8_t *end = data + size;
++    const uint8_t *sc = v4l2_enc_find_startcode(data, end);
++
++    while (sc < end) {
++        const uint8_t *nal  = sc + 3;
++        const uint8_t *next = v4l2_enc_find_startcode(nal, end);
++        const uint8_t *nend = next;
++        int ret;
++
++        while (nend > nal && !nend[-1])
++            nend--;
++        if (nend > nal) {
++            ret = cb(opaque, nal, nend - nal);
++            if (ret)
++                return ret;
++        }
++        sc = next;
++    }
++    return 0;
++}
++
++static int v4l2_enc_nal_type(enum AVCodecID codec_id, const uint8_t *nal)
++{
++    return codec_id == AV_CODEC_ID_HEVC ? (nal[0] >> 1) & 0x3f : nal[0] & 0x1f;
++}
++
++static int v4l2_enc_is_vcl(enum AVCodecID codec_id, int type)
++{
++    return codec_id == AV_CODEC_ID_HEVC ? type < 32 : type >= 1 && type <= 5;
++}
++
++typedef struct V4L2EncNalScan {
++    enum AVCodecID codec_id;
++} V4L2EncNalScan;
++
++static int v4l2_enc_vcl_cb(void *opaque, const uint8_t *nal, int size)
++{
++    const V4L2EncNalScan *scan = opaque;
++
++    return v4l2_enc_is_vcl(scan->codec_id, v4l2_enc_nal_type(scan->codec_id, nal));
++}
++
++int ff_v4l2_enc_has_picture(enum AVCodecID codec_id, const uint8_t *data, int size)
++{
++    V4L2EncNalScan scan = { codec_id };
++
++    if (codec_id != AV_CODEC_ID_H264 && codec_id != AV_CODEC_ID_HEVC)
++        return 1;
++    return v4l2_enc_for_each_nal(data, size, v4l2_enc_vcl_cb, &scan);
++}
++
++typedef struct V4L2EncParamSets {
++    enum AVCodecID codec_id;
++    uint8_t *buf;
++    int size;
++    unsigned seen;      /* bit per NAL unit type found */
++    int err;
++} V4L2EncParamSets;
++
++static int v4l2_enc_paramset_cb(void *opaque, const uint8_t *nal, int size)
++{
++    static const uint8_t startcode[4] = { 0, 0, 0, 1 };
++    V4L2EncParamSets *ps = opaque;
++    const int type = v4l2_enc_nal_type(ps->codec_id, nal);
++    const int keep = ps->codec_id == AV_CODEC_ID_HEVC ?
++                     type >= 32 && type <= 34 :             /* VPS, SPS, PPS */
++                     type == 7 || type == 8 || type == 13;  /* SPS, PPS, SPS extension */
++    uint8_t *buf;
++
++    if (v4l2_enc_is_vcl(ps->codec_id, type))
++        return 1;       /* the parameter sets come before the picture */
++    if (!keep)
++        return 0;
++    if (size > INT_MAX - AV_INPUT_BUFFER_PADDING_SIZE - 4 - ps->size) {
++        ps->err = AVERROR(ERANGE);
++        return 1;
++    }
++    buf = av_realloc(ps->buf, ps->size + 4 + size + AV_INPUT_BUFFER_PADDING_SIZE);
++    if (!buf) {
++        ps->err = AVERROR(ENOMEM);
++        return 1;
++    }
++    memcpy(buf + ps->size, startcode, 4);
++    memcpy(buf + ps->size + 4, nal, size);
++    ps->buf   = buf;
++    ps->size += 4 + size;
++    memset(ps->buf + ps->size, 0, AV_INPUT_BUFFER_PADDING_SIZE);
++    ps->seen |= 1u << (type & 31);
++    return 0;
++}
++
++int ff_v4l2_enc_extract_paramsets(enum AVCodecID codec_id, const uint8_t *data, int size,
++                                  uint8_t **out, int *out_size)
++{
++    V4L2EncParamSets ps = { codec_id };
++    unsigned need;
++
++    if (codec_id == AV_CODEC_ID_HEVC)
++        need = 1u << (32 & 31) | 1u << (33 & 31) | 1u << (34 & 31);
++    else if (codec_id == AV_CODEC_ID_H264)
++        need = 1u << 7 | 1u << 8;
++    else
++        return AVERROR(ENOSYS);
++
++    v4l2_enc_for_each_nal(data, size, v4l2_enc_paramset_cb, &ps);
++    if (ps.err < 0 || (ps.seen & need) != need) {
++        av_free(ps.buf);
++        return ps.err < 0 ? ps.err : AVERROR_INVALIDDATA;
++    }
++    *out      = ps.buf;
++    *out_size = ps.size;
++    return 0;
++}
+diff --git a/libavcodec/v4l2_enc_utils.h b/libavcodec/v4l2_enc_utils.h
+new file mode 100644
+index 0000000..2a2129d
+--- /dev/null
++++ b/libavcodec/v4l2_enc_utils.h
+@@ -0,0 +1,132 @@
++/*
++ * V4L2 mem2mem encoder helpers that do not touch the device
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#ifndef AVCODEC_V4L2_ENC_UTILS_H
++#define AVCODEC_V4L2_ENC_UTILS_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++#include "libavutil/frame.h"
++#include "libavutil/pixfmt.h"
++
++#include "codec_id.h"
++
++struct AVFifo;
++
++/**
++ * @return 1 if ff_v4l2_enc_copy_frame() can copy a frame of format src into
++ *         a buffer of format dst (the same format, or planar 4:2:0 into
++ *         NV12/NV21/P010), 0 otherwise
++ */
++int ff_v4l2_enc_can_convert(enum AVPixelFormat src, enum AVPixelFormat dst);
++
++/**
++ * @return the OUTPUT format to ask the driver for when the frames are src:
++ *         src itself if V4L2 has a format for it, else one it converts to
++ */
++enum AVPixelFormat ff_v4l2_enc_request_fmt(enum AVPixelFormat src);
++
++/**
++ * Copy a software frame into the memory of a V4L2 OUTPUT buffer, laid out
++ * as the driver's format describes it, converting planar 4:2:0 frames to
++ * the semi-planar layout when the buffer is NV12, NV21 or P010.
++ *
++ * With one memory plane (single-planar NV12, P010, YUV420, ...) the planes
++ * are contiguous: plane 0 has bytesperline[0] bytes per line and fmt_height
++ * lines, the chroma planes follow at bytesperline[0] * fmt_height with the
++ * chroma line length the V4L2 specification derives from bytesperline[0].
++ * With several memory planes (NV12M, YUV420M, ...) every plane has its own
++ * memory and bytesperline.
++ *
++ * Only the frame's own lines and columns are read from it. When the format
++ * is larger than the frame (the driver rounded it up to whole macroblocks),
++ * the last column and line are repeated into the padding, which the encoder
++ * codes and the stream's cropping hides.
++ *
++ * @param src           the frame
++ * @param dst_fmt       the buffer's pixel format
++ * @param dst           base address of each memory plane
++ * @param dst_len       length of each memory plane
++ * @param bytesperline  bytesperline of each memory plane (0: tightly packed)
++ * @param nb_mem_planes number of memory planes
++ * @param fmt_width     the format's width
++ * @param fmt_height    the format's height
++ * @param bytesused     out: bytes used in each memory plane
++ * @return 0 on success, a negative AVERROR code otherwise
++ */
++int ff_v4l2_enc_copy_frame(const AVFrame *src, enum AVPixelFormat dst_fmt,
++                           uint8_t *const dst[], const size_t dst_len[],
++                           const int bytesperline[], int nb_mem_planes,
++                           int fmt_width, int fmt_height, size_t bytesused[]);
++
++/**
++ * Decode timestamps for an encoder that reorders (B frames).
++ *
++ * The device takes frames in presentation order and returns packets in
++ * decode order, each carrying its own frame's PTS. Packet n gets the PTS of
++ * the n - delay'th frame as its DTS, where delay bounds how far a frame
++ * moves forward in decode order (the number of B frames between
++ * references); the first delay packets get the first PTS minus whole frame
++ * durations. The DTS then rise strictly (as the input PTS do) and never
++ * exceed the packet's PTS.
++ */
++typedef struct V4L2EncTimestamps {
++    struct AVFifo *pts;    ///< PTS of the frames not yet used for a DTS
++    int delay;             ///< reorder delay, in frames
++    int64_t step;          ///< one frame duration, for the first delay DTS
++    int64_t nb_in;         ///< frames sent to the device
++    int64_t nb_out;        ///< packets received from it
++} V4L2EncTimestamps;
++
++/** (Re)initialize; ts must be zeroed before the first call. */
++int  ff_v4l2_enc_ts_init(V4L2EncTimestamps *ts, int delay, int64_t step);
++void ff_v4l2_enc_ts_uninit(V4L2EncTimestamps *ts);
++/** A frame with this PTS went to the device. */
++int  ff_v4l2_enc_ts_push(V4L2EncTimestamps *ts, int64_t pts);
++/** A packet came back: its DTS. */
++int  ff_v4l2_enc_ts_next_dts(V4L2EncTimestamps *ts, int64_t *dts);
++
++/** Frames sent to the device whose packets have not come back yet. */
++static inline int64_t ff_v4l2_enc_ts_in_flight(const V4L2EncTimestamps *ts)
++{
++    return ts->nb_in - ts->nb_out;
++}
++
++/**
++ * @return 1 if an H.264/HEVC Annex B buffer holds a coded picture (a VCL NAL
++ *         unit), 0 if it holds only headers (parameter sets, SEI); 1 for
++ *         other codecs
++ */
++int ff_v4l2_enc_has_picture(enum AVCodecID codec_id, const uint8_t *data, int size);
++
++/**
++ * Collect the parameter sets (H.264: SPS, PPS; HEVC: VPS, SPS, PPS) that
++ * precede the first picture of an Annex B packet, as Annex B extradata.
++ *
++ * @param out      out: the parameter sets, padded with
++ *                 AV_INPUT_BUFFER_PADDING_SIZE zero bytes; av_free() it
++ * @param out_size out: their size
++ * @return 0 on success, AVERROR_INVALIDDATA if a required one is missing
++ */
++int ff_v4l2_enc_extract_paramsets(enum AVCodecID codec_id, const uint8_t *data, int size,
++                                  uint8_t **out, int *out_size);
++
++#endif /* AVCODEC_V4L2_ENC_UTILS_H */
+diff --git a/libavcodec/v4l2_fmt.c b/libavcodec/v4l2_fmt.c
+index 6df47e3..a2d0e19 100644
+--- a/libavcodec/v4l2_fmt.c
++++ b/libavcodec/v4l2_fmt.c
+@@ -62,6 +62,9 @@ static const struct fmt_conversion {
+ #ifdef V4L2_PIX_FMT_Y16
+     { AV_FMT(GRAY16LE),    AV_CODEC(RAWVIDEO),    V4L2_FMT(Y16) },
+ #endif
++#ifdef V4L2_PIX_FMT_P010
++    { AV_FMT(P010LE),      AV_CODEC(RAWVIDEO),    V4L2_FMT(P010) },
++#endif
+ #ifdef V4L2_PIX_FMT_NV12M
+     { AV_FMT(NV12),        AV_CODEC(RAWVIDEO),    V4L2_FMT(NV12M) },
+ #endif
+diff --git a/tests/fate/libavcodec.mak b/tests/fate/libavcodec.mak
+index e2d616e..7e73a36 100644
+--- a/tests/fate/libavcodec.mak
++++ b/tests/fate/libavcodec.mak
+@@ -110,6 +110,11 @@ fate-libavcodec-huffman: libavcodec/tests/mjpegenc_huffman$(EXESUF)
+ fate-libavcodec-huffman: CMD = run libavcodec/tests/mjpegenc_huffman$(EXESUF)
+ fate-libavcodec-huffman: CMP = null
+ 
++FATE_LIBAVCODEC-$(CONFIG_V4L2_M2M) += fate-v4l2-enc-utils
++fate-v4l2-enc-utils: libavcodec/tests/v4l2_enc_utils$(EXESUF)
++fate-v4l2-enc-utils: CMD = run libavcodec/tests/v4l2_enc_utils$(EXESUF)
++fate-v4l2-enc-utils: CMP = null
++
+ FATE_LIBAVCODEC-yes += fate-libavcodec-htmlsubtitles
+ fate-libavcodec-htmlsubtitles: libavcodec/tests/htmlsubtitles$(EXESUF)
+ fate-libavcodec-htmlsubtitles: CMD = run libavcodec/tests/htmlsubtitles$(EXESUF)

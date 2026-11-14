@@ -1,0 +1,728 @@
+diff --git a/libavcodec/v4l2_m2m_enc.c b/libavcodec/v4l2_m2m_enc.c
+index 93703cc..061c469 100644
+--- a/libavcodec/v4l2_m2m_enc.c
++++ b/libavcodec/v4l2_m2m_enc.c
+@@ -23,9 +23,14 @@
+ 
+ #include <linux/videodev2.h>
+ #include <sys/ioctl.h>
++#include <math.h>
+ #include <search.h>
+ #include "encode.h"
+ #include "libavcodec/avcodec.h"
++#include "libavcodec/codec_desc.h"
++#include "libavutil/mem.h"
++#include "libavutil/imgutils.h"
++#include "libavutil/time.h"
+ #include "libavutil/pixdesc.h"
+ #include "libavutil/pixfmt.h"
+ #include "libavutil/opt.h"
+@@ -34,6 +39,7 @@
+ #include "v4l2_context.h"
+ #include "v4l2_m2m.h"
+ #include "v4l2_fmt.h"
++#include "v4l2_enc_utils.h"
+ 
+ #define MPEG_CID(x) V4L2_CID_MPEG_VIDEO_##x
+ #define MPEG_VIDEO(x) V4L2_MPEG_VIDEO_##x
+@@ -145,44 +151,211 @@ static inline int v4l2_mpeg4_profile_from_ff(int p)
+     return AVERROR(ENOENT);
+ }
+ 
+-static int v4l2_check_b_frame_support(V4L2m2mContext *s)
++/*
++ * Ask for -bf B frames and use what the driver kept (it clamps the control
++ * to what it can do). The device returns packets in decode order, each with
++ * its own frame's timestamp; the reorder delay that the DTS need is at most
++ * the number of B frames between references, whatever order the device
++ * codes a group of frames in (V4L2EncTimestamps).
++ */
++static int v4l2_setup_b_frames(V4L2m2mContext *s)
+ {
+-    if (s->avctx->max_b_frames)
+-        av_log(s->avctx, AV_LOG_WARNING, "Encoder does not support b-frames yet\n");
++    AVCodecContext *avctx = s->avctx;
++    int want = FFMAX(avctx->max_b_frames, 0), got = 0;
+ 
+-    v4l2_set_ext_ctrl(s, MPEG_CID(B_FRAMES), 0, "number of B-frames", 0);
+-    v4l2_get_ext_ctrl(s, MPEG_CID(B_FRAMES), &s->avctx->max_b_frames, "number of B-frames", 0);
+-    if (s->avctx->max_b_frames == 0)
+-        return 0;
++    /* The legacy receive path cannot derive DTS for reordered output. */
++    if (!s->is_apple_ave) {
++        if (avctx->max_b_frames)
++            av_log(avctx, AV_LOG_WARNING, "Encoder does not support b-frames yet\n");
++        want = 0;
++    }
++
++    if (!(avctx->codec_descriptor->props & AV_CODEC_PROP_REORDER))
++        want = 0;
++
++    v4l2_set_ext_ctrl(s, MPEG_CID(B_FRAMES), want, "number of B-frames", want > 0);
++    if (v4l2_get_ext_ctrl(s, MPEG_CID(B_FRAMES), &got, "number of B-frames", want > 0) < 0)
++        got = 0;
++    got = FFMAX(got, 0);
+ 
+-    avpriv_report_missing_feature(s->avctx, "DTS/PTS calculation for V4L2 encoding");
++    if (got != want)
++        av_log(avctx, want ? AV_LOG_WARNING : AV_LOG_VERBOSE,
++               "The device codes %d B-frame(s) between references (%d asked for)\n",
++               got, want);
+ 
+-    return AVERROR_PATCHWELCOME;
++    if (!s->is_apple_ave && got > 0) {
++        av_log(avctx, AV_LOG_ERROR,
++               "DTS/PTS calculation for V4L2 encoding is only supported on the AVE driver\n");
++        return AVERROR_PATCHWELCOME;
++    }
++
++    avctx->max_b_frames = got;
++    avctx->has_b_frames = got;
++
++    return 0;
+ }
+ 
+-static inline void v4l2_subscribe_eos_event(V4L2m2mContext *s)
++static inline int v4l2_subscribe_eos_event(V4L2m2mContext *s)
+ {
+     struct v4l2_event_subscription sub;
+ 
++    s->eos_subscribed = 0;
+     memset(&sub, 0, sizeof(sub));
+     sub.type = V4L2_EVENT_EOS;
+-    if (ioctl(s->fd, VIDIOC_SUBSCRIBE_EVENT, &sub) < 0)
++    if (ioctl(s->fd, VIDIOC_SUBSCRIBE_EVENT, &sub) < 0) {
+         av_log(s->avctx, AV_LOG_WARNING,
+                "the v4l2 driver does not support end of stream VIDIOC_SUBSCRIBE_EVENT\n");
++        return AVERROR(errno);
++    }
++    s->eos_subscribed = 1;
++    return 0;
++}
++
++/*
++ * Drivers round the OUTPUT format up to what the hardware codes (whole
++ * macroblocks: 1080 lines become 1088). Ask for the picture's own size as
++ * the OUTPUT crop, so that the stream carries it (SPS frame cropping)
++ * instead of the padded size.
++ */
++static int v4l2_set_output_crop(V4L2m2mContext *s)
++{
++    AVCodecContext *avctx = s->avctx;
++    const struct v4l2_format *fmt = &s->output.format;
++    const int mplane = V4L2_TYPE_IS_MULTIPLANAR(fmt->type);
++    const unsigned width  = mplane ? fmt->fmt.pix_mp.width  : fmt->fmt.pix.width;
++    const unsigned height = mplane ? fmt->fmt.pix_mp.height : fmt->fmt.pix.height;
++    struct v4l2_selection sel = {
++        .type   = s->output.type,
++        .target = V4L2_SEL_TGT_CROP,
++        .r      = { 0, 0, avctx->width, avctx->height },
++    };
++    int ret;
++
++    if (width < avctx->width || height < avctx->height) {
++        av_log(avctx, AV_LOG_ERROR, "The device cannot take %dx%d frames (it offers %ux%u)\n",
++               avctx->width, avctx->height, width, height);
++        return AVERROR(EINVAL);
++    }
++    if (width == avctx->width && height == avctx->height)
++        return 0;
++
++    ret = ioctl(s->fd, VIDIOC_S_SELECTION, &sel);
++    /* before Linux 4.13 some drivers took only the non-_MPLANE type */
++    if (ret < 0 && errno == EINVAL && mplane) {
++        sel.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
++        sel.r = (struct v4l2_rect){ 0, 0, avctx->width, avctx->height };
++        ret = ioctl(s->fd, VIDIOC_S_SELECTION, &sel);
++    }
++    if (ret < 0) {
++        av_log(avctx, AV_LOG_WARNING, "The device codes %ux%u and cannot crop it to "
++               "%dx%d (%s): the stream will have the padded size\n",
++               width, height, avctx->width, avctx->height, av_err2str(AVERROR(errno)));
++        return 0;
++    }
++    if (sel.r.left || sel.r.top || sel.r.width != avctx->width || sel.r.height != avctx->height)
++        av_log(avctx, AV_LOG_WARNING, "Asked for a %dx%d crop of %ux%u, got %ux%u at %d,%d\n",
++               avctx->width, avctx->height, width, height,
++               sel.r.width, sel.r.height, sel.r.left, sel.r.top);
++    else
++        av_log(avctx, AV_LOG_VERBOSE, "Coding %ux%u, cropped to %dx%d\n",
++               width, height, avctx->width, avctx->height);
++
++    return 0;
++}
++
++/* Per-frame-type QP controls for constant-QP coding (rate control off). */
++static const struct v4l2_qp_ctrls {
++    enum AVCodecID codec_id;
++    uint32_t i_cid, p_cid, b_cid;   /* b_cid 0: the codec has no B frames */
++    int min, max;
++} v4l2_qp_ctrls[] = {
++    { AV_CODEC_ID_H264,  MPEG_CID(H264_I_FRAME_QP),  MPEG_CID(H264_P_FRAME_QP),
++                         MPEG_CID(H264_B_FRAME_QP),  0,  51 },
++#ifdef V4L2_CID_MPEG_VIDEO_HEVC_I_FRAME_QP
++    { AV_CODEC_ID_HEVC,  MPEG_CID(HEVC_I_FRAME_QP),  MPEG_CID(HEVC_P_FRAME_QP),
++                         MPEG_CID(HEVC_B_FRAME_QP),  0,  51 },
++#endif
++    { AV_CODEC_ID_MPEG4, MPEG_CID(MPEG4_I_FRAME_QP), MPEG_CID(MPEG4_P_FRAME_QP),
++                         MPEG_CID(MPEG4_B_FRAME_QP), 1,  31 },
++    { AV_CODEC_ID_H263,  MPEG_CID(H263_I_FRAME_QP),  MPEG_CID(H263_P_FRAME_QP),
++                         MPEG_CID(H263_B_FRAME_QP),  1,  31 },
++    { AV_CODEC_ID_VP8,   MPEG_CID(VPX_I_FRAME_QP),   MPEG_CID(VPX_P_FRAME_QP),
++                         0,                          0, 127 },
++};
++
++/* The constant QP asked for (-qp, or -q:v / global_quality), or -1. */
++static int v4l2_requested_qp(V4L2m2mContext *s)
++{
++    AVCodecContext *avctx = s->avctx;
++    V4L2m2mPriv *priv = s->priv;
++
++    if (priv->qp >= 0)
++        return priv->qp;
++    if (s->is_apple_ave && (avctx->flags & AV_CODEC_FLAG_QSCALE))
++        return FFMAX(lrintf(avctx->global_quality / (float)FF_QP2LAMBDA), 0);
++    return -1;
++}
++
++/*
++ * Constant QP: frame-level rate control off, so that the I/P/B QP controls
++ * apply (and the CQ bitrate mode for drivers that look at that instead).
++ */
++static int v4l2_set_constant_qp(V4L2m2mContext *s, int qp)
++{
++    AVCodecContext *avctx = s->avctx;
++    V4L2m2mPriv *priv = s->priv;
++    const struct v4l2_qp_ctrls *c = NULL;
++    int i, qp_i, qp_p, qp_b;
++
++    /* The QP ctrls are generic V4L2 controls, but only AVE implements them. */
++    if (!s->is_apple_ave) {
++        av_log(avctx, AV_LOG_ERROR, "Constant QP is only implemented for Apple AVE\n");
++        return AVERROR(ENOSYS);
++    }
++
++    for (i = 0; i < FF_ARRAY_ELEMS(v4l2_qp_ctrls); i++)
++        if (v4l2_qp_ctrls[i].codec_id == avctx->codec_id)
++            c = &v4l2_qp_ctrls[i];
++    if (!c) {
++        av_log(avctx, AV_LOG_ERROR, "Constant QP is not supported for %s\n",
++               avcodec_get_name(avctx->codec_id));
++        return AVERROR(ENOSYS);
++    }
++
++    qp_i = av_clip(qp, c->min, c->max);
++    qp_p = av_clip(qp_i + priv->qp_p_offset, c->min, c->max);
++    qp_b = av_clip(qp_i + priv->qp_b_offset, c->min, c->max);
++    if (qp_i != qp)
++        av_log(avctx, AV_LOG_WARNING, "QP %d out of range, using %d\n", qp, qp_i);
++
++    v4l2_set_ext_ctrl(s, MPEG_CID(FRAME_RC_ENABLE), 0, "frame level rate control", 1);
++    v4l2_set_ext_ctrl(s, MPEG_CID(BITRATE_MODE), MPEG_VIDEO(BITRATE_MODE_CQ),
++                      "constant quality bitrate mode", 0);
++    v4l2_set_ext_ctrl(s, c->i_cid, qp_i, "I-frame QP", 1);
++    v4l2_set_ext_ctrl(s, c->p_cid, qp_p, "P-frame QP", 1);
++    if (c->b_cid)
++        v4l2_set_ext_ctrl(s, c->b_cid, qp_b, "B-frame QP", avctx->max_b_frames > 0);
++
++    av_log(avctx, AV_LOG_VERBOSE, "Constant QP: I %d, P %d, B %d\n", qp_i, qp_p, qp_b);
++    s->enc_qp[0] = qp_i;
++    s->enc_qp[1] = qp_p;
++    s->enc_qp[2] = qp_b;
++
++    return 0;
+ }
+ 
+ static int v4l2_prepare_encoder(V4L2m2mContext *s)
+ {
+     AVCodecContext *avctx = s->avctx;
+     int qmin_cid, qmax_cid, qmin, qmax;
+-    int ret, val;
++    int ret, val, qp;
+ 
+     /**
+      * requirements
+      */
+     v4l2_subscribe_eos_event(s);
+ 
+-    ret = v4l2_check_b_frame_support(s);
++    ret = v4l2_setup_b_frames(s);
+     if (ret)
+         return ret;
+ 
+@@ -194,8 +367,15 @@ static int v4l2_prepare_encoder(V4L2m2mContext *s)
+ 
+     /* set ext ctrls */
+     v4l2_set_ext_ctrl(s, MPEG_CID(HEADER_MODE), MPEG_VIDEO(HEADER_MODE_SEPARATE), "header mode", 0);
+-    v4l2_set_ext_ctrl(s, MPEG_CID(BITRATE) , avctx->bit_rate, "bit rate", 1);
+-    v4l2_set_ext_ctrl(s, MPEG_CID(FRAME_RC_ENABLE), 1, "frame level rate control", 0);
++    qp = v4l2_requested_qp(s);
++    if (qp >= 0) {
++        ret = v4l2_set_constant_qp(s, qp);
++        if (ret < 0)
++            return ret;
++    } else {
++        v4l2_set_ext_ctrl(s, MPEG_CID(BITRATE) , avctx->bit_rate, "bit rate", 1);
++        v4l2_set_ext_ctrl(s, MPEG_CID(FRAME_RC_ENABLE), 1, "frame level rate control", 0);
++    }
+     v4l2_set_ext_ctrl(s, MPEG_CID(GOP_SIZE), avctx->gop_size,"gop size", 1);
+ 
+     av_log(avctx, AV_LOG_DEBUG,
+@@ -284,11 +464,204 @@ static int v4l2_send_frame(AVCodecContext *avctx, const AVFrame *frame)
+     return ff_v4l2_context_enqueue_frame(output, frame);
+ }
+ 
+-static int v4l2_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
++static int v4l2_start_streaming(AVCodecContext *avctx, V4L2m2mContext *s)
++{
++    int ret;
++
++    if (!s->output.streamon) {
++        ret = ff_v4l2_context_set_status(&s->output, VIDIOC_STREAMON);
++        if (ret) {
++            av_log(avctx, AV_LOG_ERROR, "VIDIOC_STREAMON failed on output context\n");
++            return ret;
++        }
++    }
++
++    if (!s->capture.streamon) {
++        ret = ff_v4l2_context_set_status(&s->capture, VIDIOC_STREAMON);
++        if (ret) {
++            av_log(avctx, AV_LOG_ERROR, "VIDIOC_STREAMON failed on capture context\n");
++            return ret;
++        }
++    }
++
++    return 0;
++}
++
++/*
++ * Queue the next frame, if there is one and the device has room for it; a
++ * frame it has no room for stays in s->frame. At the end of the input,
++ * start draining.
++ */
++static int v4l2_queue_input(AVCodecContext *avctx, V4L2m2mContext *s)
++{
++    AVFrame *frame = s->frame;
++    int64_t pts;
++    int ret;
++
++    if (!frame->buf[0]) {
++        ret = ff_encode_get_frame(avctx, frame);
++        if (ret == AVERROR_EOF) {
++            s->eos_event = 0;
++            ret = v4l2_send_frame(avctx, NULL);
++            return ret < 0 ? ret : 0;
++        }
++        if (ret == AVERROR(EAGAIN))
++            return 0;
++        if (ret < 0)
++            return ret;
++    }
++
++    pts = frame->pts;
++    ret = v4l2_send_frame(avctx, frame);
++    if (ret == AVERROR(EAGAIN))
++        return 0;
++    av_frame_unref(frame);
++    if (ret < 0)
++        return ret;
++
++    ret = ff_v4l2_enc_ts_push(&s->ts, pts);
++    if (ret < 0)
++        return ret;
++
++    return v4l2_start_streaming(avctx, s);
++}
++
++/*
++ * A packet from the device: put any header-only packet that came before
++ * it in front of it, and give it its DTS. AVERROR(EAGAIN): it was a
++ * header-only packet (drivers in V4L2_MPEG_VIDEO_HEADER_MODE_SEPARATE),
++ * kept for the next one, which is the frame's.
++ */
++static int v4l2_finish_packet(AVCodecContext *avctx, V4L2m2mContext *s, AVPacket *pkt)
++{
++    int64_t dts;
++    int ret;
++
++    if (!pkt->size) {
++        av_log(avctx, AV_LOG_ERROR, "The device returned an empty packet (a frame it could not code)\n");
++        return AVERROR(EIO);
++    }
++
++    if (!ff_v4l2_enc_has_picture(avctx->codec_id, pkt->data, pkt->size)) {
++        uint8_t *hdr;
++
++        if (pkt->size > INT_MAX - AV_INPUT_BUFFER_PADDING_SIZE - s->enc_hdr_size)
++            return AVERROR(ERANGE);
++        hdr = av_realloc(s->enc_hdr, s->enc_hdr_size + pkt->size);
++        if (!hdr)
++            return AVERROR(ENOMEM);
++        memcpy(hdr + s->enc_hdr_size, pkt->data, pkt->size);
++        s->enc_hdr       = hdr;
++        s->enc_hdr_size += pkt->size;
++        av_packet_unref(pkt);
++        return AVERROR(EAGAIN);
++    }
++
++    if (s->enc_hdr_size) {
++        const int size = pkt->size;
++
++        ret = av_grow_packet(pkt, s->enc_hdr_size);
++        if (ret < 0)
++            return ret;
++        memmove(pkt->data + s->enc_hdr_size, pkt->data, size);
++        memcpy(pkt->data, s->enc_hdr, s->enc_hdr_size);
++        s->enc_hdr_size = 0;
++    }
++
++    ret = ff_v4l2_enc_ts_next_dts(&s->ts, &dts);
++    if (ret < 0) {
++        av_log(avctx, AV_LOG_WARNING, "The device returned more packets than it was given frames\n");
++        dts = pkt->pts;
++    }
++
++    if (avctx->max_b_frames <= 0) {
++        pkt->dts = pkt->pts;
++    } else {
++        pkt->dts = dts;
++        if (pkt->pts != AV_NOPTS_VALUE && dts != AV_NOPTS_VALUE && dts > pkt->pts)
++            av_log(avctx, AV_LOG_WARNING, "DTS %"PRId64" > PTS %"PRId64": the device "
++                   "reorders by more than %d frame(s)\n", dts, pkt->pts, avctx->max_b_frames);
++    }
++
++    return 0;
++}
++
++/* How long to wait for the last packets once the device sent its EOS event. */
++#define V4L2_ENC_EOS_WAIT_MS 2000
++/* Wake-ups without a packet in a row that mean the device has stopped. */
++#define V4L2_ENC_MAX_IDLE    100
++
++static int v4l2_receive_packet_ave(AVCodecContext *avctx, AVPacket *avpkt)
++{
++    V4L2m2mContext *s = ((V4L2m2mPriv*)avctx->priv_data)->context;
++    V4L2Context *const capture = &s->capture;
++    int ret, idle = 0;
++
++    for (;;) {
++        int pending = 0, timeout;
++
++        if (!s->draining) {
++            ret = v4l2_queue_input(avctx, s);
++            if (ret < 0)
++                return ret;
++            pending = !!s->frame->buf[0];
++        }
++
++        if (s->draining) {
++            if (!capture->streamon)
++                return AVERROR_EOF;
++            timeout = V4L2_ENC_EOS_WAIT_MS;
++        } else if (pending || ff_v4l2_enc_ts_in_flight(&s->ts) > s->enc_hold) {
++            /*
++             * The device has more frames than it may keep back (the B frames
++             * it holds until their reference arrives, and one being coded):
++             * a packet will come. Or the frame waits for room on the OUTPUT
++             * queue, which a packet or a returned OUTPUT buffer gives.
++             */
++            timeout = -1;
++        } else {
++            /* it may be keeping every frame it has until it gets more */
++            timeout = 0;
++        }
++
++        ret = ff_v4l2_context_dequeue_packet(capture, avpkt, timeout, pending);
++        if (ret == AVERROR(EAGAIN)) {
++            if (!timeout)
++                return AVERROR(EAGAIN);
++            if (pending)
++                continue;
++            if (s->draining) {
++                av_log(avctx, AV_LOG_WARNING, "No last packet from the device during drain\n");
++                capture->done = 1;
++                return AVERROR_EOF;
++            }
++            if (++idle > V4L2_ENC_MAX_IDLE) {
++                av_log(avctx, AV_LOG_ERROR, "The device stopped returning packets\n");
++                return AVERROR(EIO);
++            }
++            continue;
++        }
++        if (ret < 0)
++            return ret;
++
++        ret = v4l2_finish_packet(avctx, s, avpkt);
++        if (ret == AVERROR(EAGAIN))
++            continue;
++        if (ret < 0)
++            av_packet_unref(avpkt);
++        return ret;
++    }
++}
++
++/*
++ * The pre-AVE receive loop: block for a packet after every frame. Kept for
++ * drivers other than apple-ave, whose buffer handling the queue-ahead loop
++ * above has not been validated against.
++ */
++static int v4l2_receive_packet_legacy(AVCodecContext *avctx, AVPacket *avpkt)
+ {
+     V4L2m2mContext *s = ((V4L2m2mPriv*)avctx->priv_data)->context;
+     V4L2Context *const capture = &s->capture;
+-    V4L2Context *const output = &s->output;
+     AVFrame *frame = s->frame;
+     int ret;
+ 
+@@ -311,24 +684,156 @@ static int v4l2_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
+     if (ret < 0 && ret != AVERROR(EAGAIN))
+         return ret;
+ 
+-    if (!output->streamon) {
+-        ret = ff_v4l2_context_set_status(output, VIDIOC_STREAMON);
+-        if (ret) {
+-            av_log(avctx, AV_LOG_ERROR, "VIDIOC_STREAMON failed on output context\n");
+-            return ret;
+-        }
++    ret = v4l2_start_streaming(avctx, s);
++    if (ret < 0)
++        return ret;
++
++dequeue:
++    return ff_v4l2_context_dequeue_packet(capture, avpkt, -1, 1);
++}
++
++static int v4l2_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
++{
++    V4L2m2mContext *s = ((V4L2m2mPriv*)avctx->priv_data)->context;
++
++    if (!s->is_apple_ave)
++        return v4l2_receive_packet_legacy(avctx, avpkt);
++
++    return v4l2_receive_packet_ave(avctx, avpkt);
++}
++
++/*
++ * Back to the state after init: both queues off, every OUTPUT buffer free,
++ * every CAPTURE buffer queued. STREAMOFF hands all buffers back.
++ */
++static int v4l2_restart_streams(AVCodecContext *avctx, V4L2m2mContext *s)
++{
++    int i, ret, err = 0;
++
++    ret = ff_v4l2_context_set_status(&s->output, VIDIOC_STREAMOFF);
++    if (ret < 0)
++        err = ret;
++    ret = ff_v4l2_context_set_status(&s->capture, VIDIOC_STREAMOFF);
++    if (ret < 0)
++        err = ret;
++    if (err < 0) {
++        av_log(avctx, AV_LOG_ERROR, "VIDIOC_STREAMOFF failed: %s\n", av_err2str(err));
++        return err;
+     }
+ 
+-    if (!capture->streamon) {
+-        ret = ff_v4l2_context_set_status(capture, VIDIOC_STREAMON);
+-        if (ret) {
+-            av_log(avctx, AV_LOG_ERROR, "VIDIOC_STREAMON failed on capture context\n");
++    for (i = 0; i < s->output.num_buffers; i++)
++        s->output.buffers[i].status = V4L2BUF_AVAILABLE;
++    for (i = 0; i < s->capture.num_buffers; i++) {
++        ret = ff_v4l2_buffer_enqueue(&s->capture.buffers[i]);
++        if (ret < 0) {
++            av_log(avctx, AV_LOG_ERROR, "Cannot requeue capture buffer %d: %s\n",
++                   i, av_err2str(ret));
+             return ret;
+         }
+     }
+ 
+-dequeue:
+-    return ff_v4l2_context_dequeue_packet(capture, avpkt);
++    s->output.done = s->capture.done = 0;
++    s->draining  = 0;
++    s->eos_event = 0;
++    av_freep(&s->enc_hdr);
++    s->enc_hdr_size = 0;
++
++    return 0;
++}
++
++/* How long the device may take to return the first packet. */
++#define V4L2_ENC_HEADER_WAIT_MS 5000
++
++/*
++ * Matroska and MP4 (AV_CODEC_FLAG_GLOBAL_HEADER) need the parameter sets
++ * before the first packet, but a stateful encoder emits them only in its
++ * stream. Code one black frame, take them from its packet, and restart the
++ * streams: the driver starts the real stream afresh at the next STREAMON,
++ * with the same controls, so the stream's own parameter sets match.
++ */
++static int v4l2_generate_extradata(AVCodecContext *avctx, V4L2m2mContext *s)
++{
++    AVFrame *frame = NULL;
++    AVPacket *pkt = NULL;
++    ptrdiff_t linesize[4];
++    int64_t deadline;
++    int i, ret, err;
++
++    if (avctx->codec_id != AV_CODEC_ID_H264 && avctx->codec_id != AV_CODEC_ID_HEVC) {
++        av_log(avctx, AV_LOG_WARNING, "No global header for %s: it stays in the stream\n",
++               avcodec_get_name(avctx->codec_id));
++        return 0;
++    }
++
++    frame = av_frame_alloc();
++    pkt   = av_packet_alloc();
++    if (!frame || !pkt) {
++        ret = AVERROR(ENOMEM);
++        goto end;
++    }
++    frame->format = avctx->pix_fmt;
++    frame->width  = avctx->width;
++    frame->height = avctx->height;
++    frame->pts    = 0;
++    ret = av_frame_get_buffer(frame, 0);
++    if (ret < 0)
++        goto end;
++    for (i = 0; i < 4; i++)
++        linesize[i] = frame->linesize[i];
++    ret = av_image_fill_black(frame->data, linesize, frame->format,
++                              AVCOL_RANGE_MPEG, frame->width, frame->height);
++    if (ret < 0)
++        goto end;
++
++    for (i = 0; i < FFMAX(avctx->max_b_frames, 0) + 1; i++) {
++        frame->pts = i;
++        ret = ff_v4l2_context_enqueue_frame(&s->output, frame);
++        if (ret == AVERROR(EAGAIN))
++            break;
++        if (ret < 0)
++            goto end;
++    }
++    ret = v4l2_start_streaming(avctx, s);
++    if (ret < 0)
++        goto end;
++
++    deadline = av_gettime_relative() + V4L2_ENC_HEADER_WAIT_MS * 1000LL;
++    for (;;) {
++        int64_t left = deadline - av_gettime_relative();
++
++        if (left <= 0) {
++            av_log(avctx, AV_LOG_ERROR, "No packet from the device within %d ms\n",
++                   V4L2_ENC_HEADER_WAIT_MS);
++            ret = AVERROR(ETIMEDOUT);
++            break;
++        }
++        ret = ff_v4l2_context_dequeue_packet(&s->capture, pkt, (int)((left + 999) / 1000), 0);
++        if (ret == AVERROR(EAGAIN))
++            continue;
++        if (ret < 0)
++            break;
++
++        av_freep(&avctx->extradata);
++        avctx->extradata_size = 0;
++        ret = ff_v4l2_enc_extract_paramsets(avctx->codec_id, pkt->data, pkt->size,
++                                            &avctx->extradata, &avctx->extradata_size);
++        av_packet_unref(pkt);
++        if (ret != AVERROR_INVALIDDATA)
++            break;
++        /* a packet without them (cannot happen with an IDR first): try the next */
++    }
++    if (ret < 0)
++        av_log(avctx, AV_LOG_ERROR, "Could not get the parameter sets for the global header: %s\n",
++               av_err2str(ret));
++    else
++        av_log(avctx, AV_LOG_VERBOSE, "Global header: %d bytes of parameter sets\n",
++               avctx->extradata_size);
++
++end:
++    err = v4l2_restart_streams(avctx, s);
++    av_frame_free(&frame);
++    av_packet_free(&pkt);
++    return ret < 0 ? ret : err;
+ }
+ 
+ static av_cold int v4l2_encode_init(AVCodecContext *avctx)
+@@ -338,6 +843,7 @@ static av_cold int v4l2_encode_init(AVCodecContext *avctx)
+     V4L2m2mPriv *priv = avctx->priv_data;
+     enum AVPixelFormat pix_fmt_output;
+     uint32_t v4l2_fmt_output;
++    int64_t step = 1;
+     int ret;
+ 
+     ret = ff_v4l2_m2m_create_context(priv, &s);
+@@ -353,7 +859,7 @@ static av_cold int v4l2_encode_init(AVCodecContext *avctx)
+ 
+     /* output context */
+     output->av_codec_id = AV_CODEC_ID_RAWVIDEO;
+-    output->av_pix_fmt = avctx->pix_fmt;
++    output->av_pix_fmt = ff_v4l2_enc_request_fmt(avctx->pix_fmt);
+ 
+     /* capture context */
+     capture->av_codec_id = avctx->codec_id;
+@@ -372,13 +878,45 @@ static av_cold int v4l2_encode_init(AVCodecContext *avctx)
+         v4l2_fmt_output = output->format.fmt.pix.pixelformat;
+ 
+     pix_fmt_output = ff_v4l2_format_v4l2_to_avfmt(v4l2_fmt_output, AV_CODEC_ID_RAWVIDEO);
+-    if (pix_fmt_output != avctx->pix_fmt) {
+-        const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(pix_fmt_output);
+-        av_log(avctx, AV_LOG_ERROR, "Encoder requires %s pixel format.\n", desc->name);
++    if (!ff_v4l2_enc_can_convert(avctx->pix_fmt, pix_fmt_output)) {
++        const char *name = av_get_pix_fmt_name(pix_fmt_output);
++        av_log(avctx, AV_LOG_ERROR, "Encoder requires %s pixel format (%s given); "
++               "convert with -pix_fmt %s or a format filter.\n",
++               name ? name : av_fourcc2str(v4l2_fmt_output),
++               av_get_pix_fmt_name(avctx->pix_fmt), name ? name : "...");
+         return AVERROR(EINVAL);
+     }
++    if (pix_fmt_output != avctx->pix_fmt)
++        av_log(avctx, AV_LOG_VERBOSE, "Converting %s frames to %s while copying them\n",
++               av_get_pix_fmt_name(avctx->pix_fmt), av_get_pix_fmt_name(pix_fmt_output));
++    /* the buffers' format; the frames stay avctx->pix_fmt */
++    output->av_pix_fmt = pix_fmt_output;
++
++    ret = v4l2_set_output_crop(s);
++    if (ret < 0)
++        return ret;
++
++    s->enc_qp[0] = s->enc_qp[1] = s->enc_qp[2] = -1;
++    ret = v4l2_prepare_encoder(s);
++    if (ret < 0)
++        return ret;
++
++    /* the first max_b_frames DTS step back from the first PTS by this */
++    if (avctx->framerate.num > 0 && avctx->framerate.den > 0)
++        step = av_rescale_q(1, av_inv_q(avctx->framerate), avctx->time_base);
++    ret = ff_v4l2_enc_ts_init(&s->ts, avctx->max_b_frames, FFMAX(step, 1));
++    if (ret < 0)
++        return ret;
++    /* the B frames it holds back, and one being coded while we copy the next */
++    s->enc_hold = avctx->max_b_frames + 1;
++
++    if ((avctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER) && s->is_apple_ave) {
++        ret = v4l2_generate_extradata(avctx, s);
++        if (ret < 0)
++            return ret;
++    }
+ 
+-    return v4l2_prepare_encoder(s);
++    return 0;
+ }
+ 
+ static av_cold int v4l2_encode_close(AVCodecContext *avctx)
+@@ -392,7 +930,13 @@ static av_cold int v4l2_encode_close(AVCodecContext *avctx)
+ #define V4L_M2M_CAPTURE_OPTS \
+     V4L_M2M_DEFAULT_OPTS,\
+     { "num_capture_buffers", "Number of buffers in the capture context", \
+-        OFFSET(num_capture_buffers), AV_OPT_TYPE_INT, {.i64 = 4 }, 4, INT_MAX, FLAGS }
++        OFFSET(num_capture_buffers), AV_OPT_TYPE_INT, {.i64 = 4 }, 4, INT_MAX, FLAGS }, \
++    { "qp", "Constant QP for I frames, rate control off (-1: rate control at -b:v)", \
++        OFFSET(qp), AV_OPT_TYPE_INT, {.i64 = -1 }, -1, 255, FLAGS }, \
++    { "qp_p_offset", "With -qp: P-frame QP minus I-frame QP", \
++        OFFSET(qp_p_offset), AV_OPT_TYPE_INT, {.i64 = 0 }, -51, 51, FLAGS }, \
++    { "qp_b_offset", "With -qp: B-frame QP minus I-frame QP", \
++        OFFSET(qp_b_offset), AV_OPT_TYPE_INT, {.i64 = 3 }, -51, 51, FLAGS }
+ 
+ static const AVOption mpeg4_options[] = {
+     V4L_M2M_CAPTURE_OPTS,
