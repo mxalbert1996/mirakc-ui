@@ -69,7 +69,9 @@ EOF
 # - 映像: libx264 (ソフトウェア) / h264_v4l2m2m (HW H.264) / hevc_v4l2m2m (HW HEVC)
 #   と yadif, scale, format。HW エンコーダは SPS の VUI を書かず SAR が消える
 #   ため、docker/ffmpeg-patches のパッチで h264_metadata / hevc_metadata を
-#   エンコーダ内部から掛け、入力フレームの SAR をそのまま書かせる
+#   エンコーダ内部から掛け、入力フレームの SAR をそのまま書かせる。
+#   同じパッチ群に AVE (Apple Video Encoder) の V4L2 m2m 拡張 (0001–0004) を
+#   含み、SAR パッチ (0005) はその上に適用する
 # - 音声: aac エンコーダ
 # - 出力: mpegts (pipe:1)。`-c:d copy` のデータストリーム (ARIB 字幕) は
 #   mpegts のデータストリームとしてそのまま通す
@@ -82,7 +84,8 @@ RUN <<EOF
         -o /tmp/ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz"
     tar -xJf /tmp/ffmpeg.tar.xz -C /tmp
     cd "/tmp/ffmpeg-$FFMPEG_VERSION"
-    for p in /tmp/ffmpeg-patches/*.patch; do
+    # 0001–0004 (AVE) をまとめて適用してから 0005 (SAR) を適用する
+    for p in $(LC_ALL=C ls /tmp/ffmpeg-patches/*.patch); do
         echo "patches: $(basename "$p")"
         patch -p1 --fuzz=0 -i "$p"
     done

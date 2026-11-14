@@ -1,0 +1,112 @@
+diff --git a/libavcodec/v4l2_context.c b/libavcodec/v4l2_context.c
+index be1df37..42ebe80 100644
+--- a/libavcodec/v4l2_context.c
++++ b/libavcodec/v4l2_context.c
+@@ -188,7 +188,16 @@ static int v4l2_handle_event(V4L2Context *ctx)
+     }
+ 
+     if (evt.type == V4L2_EVENT_EOS) {
+-        ctx->done = 1;
++        /*
++         * An encoder marks its last packet V4L2_BUF_FLAG_LAST and may queue
++         * this event before that buffer is done: stopping here could drop
++         * the last packets. The encoder ends on the flag (or EPIPE), and
++         * waits for it only a while once it has seen the event.
++         */
++        if (s->avctx && av_codec_is_encoder(s->avctx->codec) && s->is_apple_ave)
++            s->eos_event = 1;
++        else
++            ctx->done = 1;
+         return 0;
+     }
+ 
+@@ -267,7 +276,12 @@ static int v4l2_stop_encode(V4L2Context *ctx)
+     return 0;
+ }
+ 
+-static V4L2Buffer* v4l2_dequeue_v4l2buf(V4L2Context *ctx, int timeout)
++/*
++ * @param wake_for_input on a capture context, also return (NULL) when the
++ *                       output queue has a buffer to give back, so that the
++ *                       caller can queue more input
++ */
++static V4L2Buffer* v4l2_dequeue_v4l2buf(V4L2Context *ctx, int timeout, int wake_for_input)
+ {
+     struct v4l2_plane planes[VIDEO_MAX_PLANES];
+     struct v4l2_buffer buf = { 0 };
+@@ -311,7 +325,7 @@ start:
+         pfd.events =  POLLOUT | POLLWRNORM;
+     else {
+         /* no need to listen to requests for more input while draining */
+-        if (ctx_to_m2mctx(ctx)->draining)
++        if (ctx_to_m2mctx(ctx)->draining || !wake_for_input)
+             pfd.events =  POLLIN | POLLRDNORM | POLLPRI;
+     }
+ 
+@@ -319,7 +333,7 @@ start:
+         ret = poll(&pfd, 1, timeout);
+         if (ret > 0)
+             break;
+-        if (errno == EINTR)
++        if (ret < 0 && errno == EINTR)
+             continue;
+         return NULL;
+     }
+@@ -430,7 +444,7 @@ static V4L2Buffer* v4l2_getfree_v4l2buf(V4L2Context *ctx)
+     /* get back as many output buffers as possible */
+     if (V4L2_TYPE_IS_OUTPUT(ctx->type)) {
+           do {
+-          } while (v4l2_dequeue_v4l2buf(ctx, timeout));
++          } while (v4l2_dequeue_v4l2buf(ctx, timeout, 1));
+     }
+ 
+     for (i = 0; i < ctx->num_buffers; i++) {
+@@ -633,7 +647,7 @@ int ff_v4l2_context_dequeue_frame(V4L2Context* ctx, AVFrame* frame, int timeout)
+      *  1. decoded frame available
+      *  2. an input buffer is ready to be dequeued
+      */
+-    avbuf = v4l2_dequeue_v4l2buf(ctx, timeout);
++    avbuf = v4l2_dequeue_v4l2buf(ctx, timeout, 1);
+     if (!avbuf) {
+         if (ctx->done)
+             return AVERROR_EOF;
+@@ -644,16 +658,17 @@ int ff_v4l2_context_dequeue_frame(V4L2Context* ctx, AVFrame* frame, int timeout)
+     return ff_v4l2_buffer_buf_to_avframe(frame, avbuf);
+ }
+ 
+-int ff_v4l2_context_dequeue_packet(V4L2Context* ctx, AVPacket* pkt)
++int ff_v4l2_context_dequeue_packet(V4L2Context* ctx, AVPacket* pkt,
++                                   int timeout, int wake_for_input)
+ {
+     V4L2Buffer *avbuf;
+ 
+     /*
+-     * blocks until:
++     * waits (up to timeout ms, -1: no limit) until:
+      *  1. encoded packet available
+-     *  2. an input buffer ready to be dequeued
++     *  2. with wake_for_input: an input buffer ready to be dequeued
+      */
+-    avbuf = v4l2_dequeue_v4l2buf(ctx, -1);
++    avbuf = v4l2_dequeue_v4l2buf(ctx, timeout, wake_for_input);
+     if (!avbuf) {
+         if (ctx->done)
+             return AVERROR_EOF;
+diff --git a/libavcodec/v4l2_context.h b/libavcodec/v4l2_context.h
+index fdd5cf5..ecf8a1d 100644
+--- a/libavcodec/v4l2_context.h
++++ b/libavcodec/v4l2_context.h
+@@ -146,9 +146,12 @@ int ff_v4l2_context_set_status(V4L2Context* ctx, uint32_t cmd);
+  * The pkt must be non NULL.
+  * @param[in] ctx The V4L2Context to dequeue from.
+  * @param[inout] pkt The AVPacket to dequeue to.
++ * @param[in] timeout How long to wait for a packet, in ms (-1: no limit, 0: do not wait).
++ * @param[in] wake_for_input Also stop waiting when the output queue can take more input.
+  * @return 0 in case of success, AVERROR(EAGAIN) if no buffer was ready, another negative error in case of error.
+  */
+-int ff_v4l2_context_dequeue_packet(V4L2Context* ctx, AVPacket* pkt);
++int ff_v4l2_context_dequeue_packet(V4L2Context* ctx, AVPacket* pkt,
++                                   int timeout, int wake_for_input);
+ 
+ /**
+  * Dequeues a buffer from a V4L2Context to an AVFrame.

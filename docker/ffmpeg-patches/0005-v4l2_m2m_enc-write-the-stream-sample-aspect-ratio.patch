@@ -1,0 +1,225 @@
+--- a/libavcodec/v4l2_m2m.h
++++ b/libavcodec/v4l2_m2m.h
+@@ -80,6 +80,8 @@
+     /* encoding: header-only packet data, put in front of the next packet */
+     uint8_t *enc_hdr;
+     int enc_hdr_size;
++    /* encoding: puts the stream's sample aspect ratio in the parameter sets */
++    struct AVBSFContext *sar_bsf;
+ 
+     /* Reference to self; only valid while codec is active. */
+     struct V4L2m2mContext *self_ref;
+--- a/libavcodec/v4l2_m2m.c
++++ b/libavcodec/v4l2_m2m.c
+@@ -36,6 +36,7 @@
+ #include "libavutil/imgutils.h"
+ #include "libavutil/pixfmt.h"
+ #include "libavutil/refstruct.h"
++#include "bsf.h"
+ #include "v4l2_context.h"
+ #include "v4l2_fmt.h"
+ #include "v4l2_m2m.h"
+@@ -268,6 +269,7 @@
+     av_frame_free(&s->frame);
+     ff_v4l2_enc_ts_uninit(&s->ts);
+     av_freep(&s->enc_hdr);
++    av_bsf_free(&s->sar_bsf);
+     av_packet_unref(&s->buf_pkt);
+ }
+ 
+--- a/libavcodec/v4l2_m2m_enc.c
++++ b/libavcodec/v4l2_m2m_enc.c
+@@ -26,6 +26,7 @@
+ #include <math.h>
+ #include <search.h>
+ #include "encode.h"
++#include "bsf.h"
+ #include "libavcodec/avcodec.h"
+ #include "libavcodec/codec_desc.h"
+ #include "libavutil/mem.h"
+@@ -527,6 +528,75 @@
+ }
+ 
+ /*
++ * The device's parameter sets carry no VUI sample aspect ratio, so a decoder
++ * assumes square pixels and an anamorphic stream (ISDB's 1440x1080) plays as
++ * 4:3. h264_metadata/hevc_metadata rewrite them in place with the ratio the
++ * encoder was given, so nothing is left for the caller to add.
++ */
++static int v4l2_init_sar_bsf(V4L2m2mContext *s)
++{
++    AVCodecContext *avctx = s->avctx;
++    const AVBitStreamFilter *filter;
++    AVRational sar = avctx->sample_aspect_ratio;
++    const char *name;
++    int ret;
++
++    if (sar.num <= 0 || sar.den <= 0 || sar.num == sar.den)
++        return 0;
++    if (avctx->codec_id != AV_CODEC_ID_H264 && avctx->codec_id != AV_CODEC_ID_HEVC)
++        return 0;
++
++    name   = avctx->codec_id == AV_CODEC_ID_H264 ? "h264_metadata" : "hevc_metadata";
++    filter = av_bsf_get_by_name(name);
++    if (!filter) {
++        av_log(avctx, AV_LOG_WARNING, "No %s bitstream filter: the stream carries "
++               "no aspect ratio\n", name);
++        return 0;
++    }
++
++    ret = av_bsf_alloc(filter, &s->sar_bsf);
++    if (ret < 0)
++        return ret;
++    s->sar_bsf->par_in->codec_id = avctx->codec_id;
++    s->sar_bsf->par_in->width    = avctx->width;
++    s->sar_bsf->par_in->height   = avctx->height;
++    ret = av_opt_set_q(s->sar_bsf->priv_data, "sample_aspect_ratio", sar, 0);
++    if (!ret)
++        ret = av_bsf_init(s->sar_bsf);
++    if (ret < 0) {
++        av_log(avctx, AV_LOG_ERROR, "Cannot write the aspect ratio %d:%d: %s\n",
++               sar.num, sar.den, av_err2str(ret));
++        av_bsf_free(&s->sar_bsf);
++        return 0;
++    }
++
++    av_log(avctx, AV_LOG_VERBOSE, "Writing aspect ratio %d:%d into the parameter sets\n",
++           sar.num, sar.den);
++    return 0;
++}
++
++/*
++ * Only an access unit that carries an SPS has the VUI to rewrite; the rest
++ * of the stream stays byte-identical to what the device coded. One access
++ * unit in, one out: EAGAIN would collide with the caller's "header-only
++ * packet" convention, so it is reported as the bug it would be.
++ */
++static int v4l2_filter_sar(AVCodecContext *avctx, V4L2m2mContext *s, AVPacket *pkt)
++{
++    int ret;
++
++    if (!s->sar_bsf || !pkt->size)
++        return 0;
++    if (!ff_v4l2_enc_has_sps(avctx->codec_id, pkt->data, pkt->size))
++        return 0;
++    ret = av_bsf_send_packet(s->sar_bsf, pkt);
++    if (ret < 0)
++        return ret == AVERROR(EAGAIN) ? AVERROR_BUG : ret;
++    ret = av_bsf_receive_packet(s->sar_bsf, pkt);
++    return ret == AVERROR(EAGAIN) ? AVERROR_BUG : ret;
++}
++
++/*
+  * A packet from the device: put any header-only packet that came before
+  * it in front of it, and give it its DTS. AVERROR(EAGAIN): it was a
+  * header-only packet (drivers in V4L2_MPEG_VIDEO_HEADER_MODE_SEPARATE),
+@@ -583,7 +653,7 @@
+                    "reorders by more than %d frame(s)\n", dts, pkt->pts, avctx->max_b_frames);
+     }
+ 
+-    return 0;
++    return v4l2_filter_sar(avctx, s, pkt);
+ }
+ 
+ /* How long to wait for the last packets once the device sent its EOS event. */
+@@ -689,7 +759,10 @@
+         return ret;
+ 
+ dequeue:
+-    return ff_v4l2_context_dequeue_packet(capture, avpkt, -1, 1);
++    ret = ff_v4l2_context_dequeue_packet(capture, avpkt, -1, 1);
++    if (ret < 0)
++        return ret;
++    return v4l2_filter_sar(avctx, s, avpkt);
+ }
+ 
+ static int v4l2_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
+@@ -813,6 +886,10 @@
+         if (ret < 0)
+             break;
+ 
++        ret = v4l2_filter_sar(avctx, s, pkt);
++        if (ret < 0)
++            break;
++
+         av_freep(&avctx->extradata);
+         avctx->extradata_size = 0;
+         ret = ff_v4l2_enc_extract_paramsets(avctx->codec_id, pkt->data, pkt->size,
+@@ -830,6 +907,8 @@
+                avctx->extradata_size);
+ 
+ end:
++    if (s->sar_bsf)
++        av_bsf_flush(s->sar_bsf);
+     err = v4l2_restart_streams(avctx, s);
+     av_frame_free(&frame);
+     av_packet_free(&pkt);
+@@ -910,6 +989,10 @@
+     /* the B frames it holds back, and one being coded while we copy the next */
+     s->enc_hold = avctx->max_b_frames + 1;
+ 
++    ret = v4l2_init_sar_bsf(s);
++    if (ret < 0)
++        return ret;
++
+     if ((avctx->flags & AV_CODEC_FLAG_GLOBAL_HEADER) && s->is_apple_ave) {
+         ret = v4l2_generate_extradata(avctx, s);
+         if (ret < 0)
+--- a/libavcodec/v4l2_enc_utils.h
++++ b/libavcodec/v4l2_enc_utils.h
+@@ -118,6 +118,12 @@
+ int ff_v4l2_enc_has_picture(enum AVCodecID codec_id, const uint8_t *data, int size);
+ 
+ /**
++ * @return 1 if an H.264/HEVC Annex B buffer holds a sequence parameter set,
++ *         the parameter set that carries the sample aspect ratio; 0 otherwise
++ */
++int ff_v4l2_enc_has_sps(enum AVCodecID codec_id, const uint8_t *data, int size);
++
++/**
+  * Collect the parameter sets (H.264: SPS, PPS; HEVC: VPS, SPS, PPS) that
+  * precede the first picture of an Annex B packet, as Annex B extradata.
+  *
+--- a/libavcodec/v4l2_enc_utils.c
++++ b/libavcodec/v4l2_enc_utils.c
+@@ -380,6 +380,24 @@
+     return v4l2_enc_for_each_nal(data, size, v4l2_enc_vcl_cb, &scan);
+ }
+ 
++static int v4l2_enc_sps_cb(void *opaque, const uint8_t *nal, int size)
++{
++    const V4L2EncNalScan *scan = opaque;
++    const int type = v4l2_enc_nal_type(scan->codec_id, nal);
++
++    return scan->codec_id == AV_CODEC_ID_HEVC ? type == 33 :            /* SPS */
++                                               type == 7 || type == 13; /* SPS, SPS extension */
++}
++
++int ff_v4l2_enc_has_sps(enum AVCodecID codec_id, const uint8_t *data, int size)
++{
++    V4L2EncNalScan scan = { codec_id };
++
++    if (codec_id != AV_CODEC_ID_H264 && codec_id != AV_CODEC_ID_HEVC)
++        return 0;
++    return v4l2_enc_for_each_nal(data, size, v4l2_enc_sps_cb, &scan);
++}
++
+ typedef struct V4L2EncParamSets {
+     enum AVCodecID codec_id;
+     uint8_t *buf;
+--- a/libavcodec/tests/v4l2_enc_utils.c
++++ b/libavcodec/tests/v4l2_enc_utils.c
+@@ -539,6 +539,13 @@
+     CHECK(ff_v4l2_enc_has_picture(AV_CODEC_ID_HEVC, hevc_trail, sizeof(hevc_trail)), "hevc trail");
+     CHECK(ff_v4l2_enc_has_picture(AV_CODEC_ID_VP8, h264_hdr, sizeof(h264_hdr)), "vp8");
+ 
++    CHECK(ff_v4l2_enc_has_sps(AV_CODEC_ID_H264, h264_hdr, sizeof(h264_hdr)), "h264 hdr sps");
++    CHECK(ff_v4l2_enc_has_sps(AV_CODEC_ID_H264, h264_idr, sizeof(h264_idr)), "h264 idr sps");
++    CHECK(!ff_v4l2_enc_has_sps(AV_CODEC_ID_H264, h264_b, sizeof(h264_b)), "h264 b sps");
++    CHECK(ff_v4l2_enc_has_sps(AV_CODEC_ID_HEVC, hevc_hdr, sizeof(hevc_hdr)), "hevc hdr sps");
++    CHECK(!ff_v4l2_enc_has_sps(AV_CODEC_ID_HEVC, hevc_idr, sizeof(hevc_idr)), "hevc idr sps");
++    CHECK(!ff_v4l2_enc_has_sps(AV_CODEC_ID_HEVC, hevc_trail, sizeof(hevc_trail)), "hevc trail sps");
++    CHECK(!ff_v4l2_enc_has_sps(AV_CODEC_ID_VP8, h264_hdr, sizeof(h264_hdr)), "vp8 sps");
+ }
+ 
+ static void test_paramsets(void)
