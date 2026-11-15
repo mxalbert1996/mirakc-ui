@@ -29,6 +29,15 @@ const FIRST_CHUNK_TIMEOUT_MS = 15000;
 /** 停止処理の完了待ちの上限。SIGKILL しても回収されないプロセスで固まらないため。 */
 const STOP_WAIT_MS = 4000;
 
+/**
+ * 切り替え直後は旧ストリームのチューナー解放を待つ必要がある。mirakc は
+ * チューナー不足を 404 (TunerUnavailable) で返すので、404 はサービス不在
+ * だけでなく「まだ解放されていない」も意味する (実測で解放まで最大 ~1.8 秒)。
+ */
+const UPSTREAM_RETRY_WINDOW_MS = 3000;
+const UPSTREAM_RETRY_MIN_MS = 100;
+const UPSTREAM_RETRY_MAX_MS = 500;
+
 /** `promise` が ms 以内に解決しなければ諦める (待ち続けてリクエストを止めない)。 */
 function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -135,17 +144,72 @@ class UpstreamError extends Error {
   }
 }
 
+/** チューナー不足として再試行する status。他は即座に返す。 */
+const UPSTREAM_RETRY_STATUSES = new Set([404, 503]);
+
+/** signal で中断できる待機。 */
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
+/**
+ * mirakc のストリームを取得する。404/503 (チューナー不足) の間だけ待って
+ * 再試行し、200 やその他の status はそのまま返す。待ち時間は 100ms から
+ * 1.5 倍ずつ増やして 500ms で頭打ちにする。期限切れ・中断時は最後の応答を
+ * 返す (呼び出し側が status をそのまま応答に使う)。
+ */
+export async function fetchUpstream(
+  url: string,
+  signal: AbortSignal,
+  fetcher: typeof fetch = fetch,
+  windowMs = UPSTREAM_RETRY_WINDOW_MS,
+): Promise<Response> {
+  const deadline = Date.now() + windowMs;
+  let wait = UPSTREAM_RETRY_MIN_MS;
+  while (true) {
+    const res = await fetcher(url, { signal });
+    if (!UPSTREAM_RETRY_STATUSES.has(res.status)) {
+      return res;
+    }
+    // 再試行する応答の body (mirakc の JSON エラー) は読まないので捨てる。
+    res.body?.cancel().catch(() => {});
+    const remaining = deadline - Date.now();
+    if (signal.aborted || remaining <= 0) {
+      return res;
+    }
+    await abortableDelay(Math.min(wait, remaining), signal);
+    // 中断されたら次の fetch を投げない (abort 済みの signal は即座に reject する)。
+    if (signal.aborted) {
+      return res;
+    }
+    wait = Math.min(Math.round(wait * 1.5), UPSTREAM_RETRY_MAX_MS);
+  }
+}
+
 /**
  * mirakc から取り、tsreadex・ffmpeg を繋いで最初のチャンクまで待つ。
  * 最初のチャンクが出なければ (ffmpeg 即終了 / デバイス占有 / タイムアウト)
  * 後始末して null を返す。呼び出し側は次の候補へ進む。
  */
 async function startAttempt(opts: StartOptions): Promise<Attempt | null> {
-  const upstream = await fetch(opts.streamUrl, { signal: opts.signal });
+  const upstream = await fetchUpstream(opts.streamUrl, opts.signal);
   if (!upstream.ok || !upstream.body) {
-    console.error(
-      `[transcode] mirakc stream failed serviceId=${opts.serviceId} status=${upstream.status}`,
-    );
+    // 中断で打ち切った場合はチューナー不足による失敗ではないので、このログは出さない。
+    if (!opts.signal.aborted) {
+      console.error(
+        `[transcode] mirakc stream failed serviceId=${opts.serviceId} status=${upstream.status}`,
+      );
+    }
+    // 再試行しなかった失敗応答の body も、呼び出し側が status しか使わないので閉じる。
+    upstream.body?.cancel().catch(() => {});
     throw new UpstreamError(upstream.ok ? 502 : upstream.status);
   }
 
@@ -370,10 +434,18 @@ transcode.get("/services/:id", async (c) => {
           headers: { "Content-Type": "text/plain; charset=utf-8" },
         });
       }
-      console.error(
-        `[transcode] attempt failed serviceId=${serviceId} encoder=${encoder}`,
-        e,
-      );
+      if (c.req.raw.signal.aborted) {
+        // 中断と同時に起きた失敗も握り潰さず、スタックなしで残す。
+        const detail = e instanceof Error ? e.message : String(e);
+        console.error(
+          `[transcode] attempt failed (aborted) serviceId=${serviceId} encoder=${encoder} error=${detail}`,
+        );
+      } else {
+        console.error(
+          `[transcode] attempt failed serviceId=${serviceId} encoder=${encoder}`,
+          e,
+        );
+      }
     }
     if (attempt === null) {
       continue;
