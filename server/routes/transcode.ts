@@ -26,6 +26,12 @@ export const transcode = new Hono();
 /** ffmpeg が起動して最初の出力を返すまでの上限。 */
 const FIRST_CHUNK_TIMEOUT_MS = 15000;
 
+/**
+ * 入力の解析上限。既定 (5MB) は最初の映像が出るまで実測 4.5 秒かかり、その分
+ * 再生開始が遅れる。TS は先頭で全ストリームを判別できるので 500KB で足りる。
+ */
+const PROBE_SIZE = "500000";
+
 /** 停止処理の完了待ちの上限。SIGKILL しても回収されないプロセスで固まらないため。 */
 const STOP_WAIT_MS = 4000;
 
@@ -75,6 +81,8 @@ function spawnFfmpeg(opts: StartOptions): Deno.ChildProcess {
       "nobuffer",
       "-analyzeduration",
       "0",
+      "-probesize",
+      PROBE_SIZE,
       "-i",
       "pipe:0",
       "-map",
@@ -83,6 +91,11 @@ function spawnFfmpeg(opts: StartOptions): Deno.ChildProcess {
       `0:a:${opts.audioTrackIndex}?`,
       "-map",
       "0:d?",
+      // ARIB の EPG カルーセル (PID 0x12) は再生に使わず、時刻が映像から大きく
+      // ずれたまま流れ続けるため多重化が詰まり、最初の映像が約 10 秒遅れる
+      // (実測 17.1 秒 → 2.3 秒)。字幕・ID3 (0:d?) は残す。
+      "-map",
+      "-0:#0x12",
       "-ignore_unknown",
       "-max_delay",
       "250000",
