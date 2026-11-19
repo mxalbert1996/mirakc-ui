@@ -6,6 +6,27 @@ COPY . .
 RUN deno install
 RUN deno task build
 
+# Cross-compile the Go server the same way as the client builder above: run
+# the compiler on the build platform and target $TARGETOS/$TARGETARCH, so
+# multi-architecture builds never need an emulated toolchain. CGO_ENABLED=0
+# makes the binary fully static (no libc dependency at runtime).
+FROM --platform=$BUILDPLATFORM docker.io/golang:1.27 AS mirakc-ui-go-build
+
+ARG TARGETOS TARGETARCH
+
+WORKDIR /src
+# Cache the module download separately from the sources so ordinary code
+# edits do not re-fetch dependencies from the proxy.
+COPY server-go/go.mod server-go/go.sum ./
+RUN go mod download
+COPY server-go ./server-go
+# The client built above fills the go:embed all:static dir. The committed
+# .gitkeep stays behind harmlessly: the web handler never serves it.
+COPY --from=mirakc-ui-build /app/client/dist ./server-go/web/static
+WORKDIR server-go
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags='-s -w' -o /out/mirakc-ui ./cmd/mirakc-ui
+
 FROM docker.io/debian:trixie-slim AS tsreadex-build
 
 RUN <<EOF
@@ -21,10 +42,6 @@ RUN <<EOF
     cmake -B /tmp/tsreadex/build -S /tmp/tsreadex -DCMAKE_BUILD_TYPE=Release
     cmake --build /tmp/tsreadex/build
 EOF
-
-# 実行時イメージ用の Deno バイナリの取得元。ターゲットと同じプラットフォームの
-# イメージから COPY するため、マルチアーキテクチャビルドでも arch が揃う。
-FROM docker.io/denoland/deno:2.9.8 AS deno
 
 # ffmpeg は Debian のパッケージを使わず、必要な機能だけを有効にしてビルドする。
 # ffmpeg パッケージは libavdevice 経由で mesa/LLVM 等を引き連れ約 410 MB になるが、
@@ -116,8 +133,8 @@ RUN <<EOF
     install -m755 ffmpeg /usr/local/bin/ffmpeg
 EOF
 
-# Debian 素のイメージに Deno バイナリだけを載せる (公式イメージは apt 済みの
-# 追加パッケージを含み、実行時には不要な分だけイメージが大きくなる)。
+# The app is a single statically linked Go binary, so the runtime image is
+# plain Debian plus tini and CA certificates — nothing else.
 FROM docker.io/debian:trixie-slim
 
 RUN <<EOF
@@ -126,50 +143,37 @@ RUN <<EOF
     rm -rf /var/lib/apt/lists/*
 EOF
 
-COPY --from=deno /usr/bin/deno /usr/local/bin/deno
 COPY --from=tsreadex-build /tmp/tsreadex/build/tsreadex /usr/local/bin/tsreadex
 COPY --from=ffmpeg-build /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
-RUN chmod +x /usr/local/bin/deno /usr/local/bin/tsreadex
+COPY --from=mirakc-ui-go-build /out/mirakc-ui /usr/local/bin/mirakc-ui
+RUN chmod +x /usr/local/bin/tsreadex /usr/local/bin/mirakc-ui
 
+# Run as a dedicated non-root user. Everything the server writes (SQLite
+# db + WAL, export files) lives under DATA_DIR, which defaults to ./data
+# relative to WORKDIR (/app/data) — the same volume convention as before
+# (./mirakc-ui-data:/app/data). Nothing is written elsewhere, so a
+# read-only root filesystem works.
+RUN <<EOF
+    useradd --system --create-home --uid 900 mirakc-ui
+    mkdir -p /app/data
+    chown mirakc-ui:mirakc-ui /app/data
+EOF
+USER mirakc-ui
 WORKDIR /app
 
-# 実行時に必要な依存だけに絞った設定を作る。deno.json の import マップには
-# client (React / Vite / Storybook / Vitest 等) の依存も含まれるため、そのまま
-# `deno install` すると実行時に一切読まれない npm パッケージ (約 300 MB) が
-# イメージに入る。server/ が import するパッケージだけを deno.json から引き継ぎ、
-# バージョンの情報源は deno.json 1 つに保つ (追加時はここに名前を足す)。
-# 不足があれば次の `deno cache server/main.ts` が解決に失敗してビルドが止まる。
-COPY deno.json deno.lock ./
-RUN <<EOF
-    deno eval '
-    const path = "deno.json";
-    const config = JSON.parse(Deno.readTextFileSync(path));
-    const runtimeDeps = ["hono", "@cfworker/json-schema", "json-schema-to-ts"];
-    config.imports = Object.fromEntries(
-      runtimeDeps.map((specifier) => [specifier, config.imports[specifier]]),
-    );
-    Deno.writeTextFileSync(path, JSON.stringify(config, null, 2) + "\n");
-    '
-EOF
-RUN deno install
-COPY --from=mirakc-ui-build /app/client/dist ./client/dist
-COPY server ./server
-RUN deno cache server/main.ts
-
-# ビルドのたびに変わるため、キャッシュを無効化しないよう最後に置く。
+# Changes on every build; keep it last so it never invalidates cached layers.
 ARG GIT_REVISION
-ENV DENO_DEPLOYMENT_ID=${GIT_REVISION}
+ENV MIRAKC_UI_REVISION=${GIT_REVISION}
 
 EXPOSE 8000
 
-# タイムゾーンはイメージにハードコードしない (中立)。録画通知・録画ファイル名の
-# 日時整形はプロセスの TZ 環境変数に依存するため、実行時に渡す
-# (compose の environment: か docker run -e TZ=Asia/Tokyo)。未設定なら UTC。
-# Deno (V8/ICU) はゾーン情報を内蔵するため tzdata の追加インストールは不要。
+# Timezone is not baked into the image (neutral). Date formatting for
+# recording notifications / file names follows the process TZ — pass it at
+# runtime (compose environment: or docker run -e TZ=Asia/Tokyo); unset
+# means UTC. No tzdata package is needed: the Go binary embeds time/tzdata.
 
-# Hono が client/dist を serveStatic しつつ /api を提供する。
-# CMD は --env-file を使わず、コンテナの環境変数 (MIRAKC_URL / TZ 等) を直接読む。
-# ENTRYPOINT は tini のみにして、`docker run <image> ffmpeg` / `sh` のような
-# 任意コマンドの実行を可能にする (deno は CMD 側で指定する)。
+# One binary serves the embedded client (SPA) and the /api routes. ENTRYPOINT
+# is tini only, so `docker run <image> ffmpeg` / `sh` still works, and
+# `mirakc-ui import` runs the explicit re-import subcommand.
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["deno", "serve", "-A", "--port", "8000", "server/main.ts"]
+CMD ["/usr/local/bin/mirakc-ui"]

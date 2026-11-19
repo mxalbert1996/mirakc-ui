@@ -79,11 +79,54 @@ mirakc-ui stores its settings (e.g. keyword recording rules) in a SQLite
 database under `/app/data`. Mount this directory as shown above so the settings
 survive container recreation.
 
+The image runs as a non-root user (uid 900). With a bind-mounted data directory
+like the one above, make sure it is writable by that user — on first use, run
+`sudo chown -R 900:900 ./mirakc-ui-data` (freshly created named Docker volumes
+handle this automatically via copy-up; data written by older, root-running
+images does not — see the migration section below). The container also works
+with a read-only root filesystem (`read_only: true`); it only ever writes
+under `/app/data`, which must therefore be a writable mount (volume or tmpfs)
+in that mode.
+
 On Apple AVE hardware, add `V4L2_CQ: 1` to the `environment:` block to encode
 with constant QP instead of a target bitrate (see
 [docs/transcode-quality.md](docs/transcode-quality.md)). With this setting,
 hardware encoders that lack constant QP fail their probe and the stream falls
 back to libx264.
+
+### Migrating from the Deno-based image
+
+The application server is written in Go (the runtime image contains no Deno).
+Settings created with older, Deno-based images live in a Deno KV database
+(`kv.sqlite3` under `/app/data`), whose format the Go server cannot read.
+To migrate, produce an `export.json` with the last Deno-based image and let
+the new one import it on first boot:
+
+```sh
+# with the data volume mounted, using the pinned final Deno image:
+docker run --rm -v ./mirakc-ui-data:/app/data \
+  ghcr.io/mxalbert1996/mirakc-ui:sha-4872ce0250b7411d97511d1ff74953986282494b \
+  deno task export:data
+```
+
+Data written by the old image is root-owned, while the new image runs as
+uid 900 — fix the ownership once, before the first boot:
+
+```sh
+docker run --rm -u 0 --entrypoint /bin/sh -v ./mirakc-ui-data:/app/data \
+  ghcr.io/mxalbert1996/mirakc-ui:latest \
+  -c 'chown -R 900:900 /app/data'
+```
+
+Then start the new image with the same volume: on first boot it imports
+`export.json` (validating every record) and renames it to
+`export.json.imported`. Delete the leftover `kv.sqlite3` files when you are
+satisfied with the migration; the pinned Deno image above can always re-read
+them (its runtime receives security patches until October 2027). The export
+contains the ntfy access token and the Discord webhook URL in plaintext, so
+remove it once the migration is complete. An explicit re-import is also
+available:
+`docker run --rm -v ./mirakc-ui-data:/app/data <image> mirakc-ui import`.
 
 ### Authentication (optional)
 

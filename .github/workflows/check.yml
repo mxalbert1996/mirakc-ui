@@ -71,6 +71,12 @@ jobs:
           cache: npm
           cache-dependency-path: docs/api/package-lock.json
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server-go/go.mod
+          cache: false
+
       - name: Install dependencies
         run: npm ci
 
@@ -86,5 +92,49 @@ jobs:
           npm run bundle:json
           npm run emit-server-schemas -- ../../server/lib/api/internal-schemas.ts
 
+      # server-go/internal/api/types.gen.go が OpenAPI から再生成した内容と一致すること。
+      # ローカルと同じ手順 (internal/api/generate.sh) を go run で再現する。
+      - name: Bundle OpenAPI (refs kept)
+        run: npm run build:bundle
+
+      - name: Generate Go API types
+        working-directory: server-go/internal/api
+        run: |
+          go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.2 \
+            --config oapi-codegen.yaml ../../../docs/api/dist/api.yaml
+          git diff --exit-code -- types.gen.go
+
       - name: Check for uncommitted changes
         run: git diff --exit-code
+
+  server-go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server-go/go.mod
+          cache: true
+          cache-dependency-path: server-go/go.sum
+
+      - name: Check formatting
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "$files"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      # ubuntu ランナーには ffmpeg が入っているため実 ffmpeg プローブテストも走る
+      - name: Test
+        run: go test -race ./...
