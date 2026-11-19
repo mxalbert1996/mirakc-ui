@@ -31,3 +31,5 @@ node_modules/
 .design-sync/node_modules
 .ds-sync/
 ds-bundle/
+server-go/web/static/*
+!server-go/web/static/.gitkeep
