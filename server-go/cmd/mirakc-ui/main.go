@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -75,6 +76,11 @@ func main() {
 		Addr:              ":" + port,
 		Handler:           application.Handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		// Deriving request contexts from the signal context gives
+		// long-lived streams (SSE comments, later transcode) the same
+		// termination semantics the Deno process had: a SIGTERM/SIGINT
+		// ends them immediately instead of blocking Shutdown.
+		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
 	serveErr := make(chan error, 1)
 	go func() {

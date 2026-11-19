@@ -3,6 +3,7 @@ module github.com/mxalbert1996/mirakc-ui/server-go
 go 1.27.4
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/google/uuid v1.6.0
 	github.com/oapi-codegen/runtime v1.9.0
 	modernc.org/sqlite v1.62.0

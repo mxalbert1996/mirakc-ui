@@ -27,6 +27,9 @@ type Deps struct {
 	MirakcProxy http.Handler
 	// Programs serves GET /api/programs. nil likewise.
 	Programs http.Handler
+	// Comments serves GET /api/comments/services/{id}/stream (the
+	// one-time-ticket path). nil likewise.
+	Comments http.Handler
 }
 
 // testNotification is the ntfy/Discord test-send payload
@@ -71,6 +74,9 @@ func NewRouter(d Deps) *http.ServeMux {
 	}
 	if d.Programs != nil {
 		mux.Handle("/api/programs", d.Programs)
+	}
+	if d.Comments != nil {
+		mux.Handle("GET /api/comments/services/{id}/stream", d.Comments)
 	}
 
 	mux.Handle("/", web.Handler())

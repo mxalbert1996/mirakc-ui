@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mxalbert1996/mirakc-ui/server-go/internal/comments"
 	"github.com/mxalbert1996/mirakc-ui/server-go/internal/httpapi"
 	"github.com/mxalbert1996/mirakc-ui/server-go/internal/keyword"
 	"github.com/mxalbert1996/mirakc-ui/server-go/internal/store"
@@ -56,6 +58,9 @@ func (f *fakeMirakc) handler() http.Handler {
 		f.programFetches++
 		f.mu.Unlock()
 		w.Write([]byte(`{"id":` + r.PathValue("id") + `,"name":"夜のニュース","startAt":1795103802213,"duration":1800,"networkId":1,"serviceId":2}`))
+	})
+	mux.HandleFunc("/api/services/{id}", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":` + r.PathValue("id") + `,"networkId":4,"serviceId":141,"name":"日テレ","channel":{"channel":"gr026"}}`))
 	})
 	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -408,5 +413,118 @@ func TestSSEEventNotifiesAndInvalidates(t *testing.T) {
 	}
 	if !strings.Contains(payload.Message, "BS日テレ") {
 		t.Errorf("message missing service line: %q", payload.Message)
+	}
+}
+
+func TestCommentsStreamThroughApp(t *testing.T) {
+	st := newStore(t)
+	fake := newFakeMirakc()
+	upstream := httptest.NewServer(fake.handler())
+	t.Cleanup(upstream.Close)
+
+	_, ts := newTestApp(t, Deps{Store: st, Auth: httpapi.New(""), MirakcURL: upstream.URL, TimeZone: "Asia/Tokyo"})
+
+	// No live-comment mappings: sources resolves to the empty list and
+	// the stream ends right after the sources event (client-side
+	// "not comment-capable" contract).
+	status, body := getStream(t, ts.URL+"/api/comments/services/1/stream")
+	if status != 200 {
+		t.Fatalf("stream = %d, want 200", status)
+	}
+	if !strings.HasPrefix(body, "event: sources\ndata: []\n\n") {
+		t.Fatalf("stream head = %q", body[:min(len(body), 60)])
+	}
+}
+
+func TestCommentsStreamUnsetMIRAKC(t *testing.T) {
+	st := newStore(t)
+	_, ts := newTestApp(t, Deps{Store: st, Auth: httpapi.New(""), MirakcURL: ""})
+
+	res, body := get(t, ts.URL+"/api/comments/services/1/stream")
+	if res.StatusCode != 503 || strings.TrimSpace(body) != `{"error":"MIRAKC_URL is not set"}` {
+		t.Fatalf("unset stream = %d %q, want the 503 convention", res.StatusCode, body)
+	}
+}
+
+func TestCommentsStreamTicketAuth(t *testing.T) {
+	st := newStore(t)
+	fake := newFakeMirakc()
+	upstream := httptest.NewServer(fake.handler())
+	t.Cleanup(upstream.Close)
+
+	_, ts := newTestApp(t, Deps{Store: st, Auth: httpapi.New("stoken"), MirakcURL: upstream.URL, TimeZone: "Asia/Tokyo"})
+
+	res, body := get(t, ts.URL+"/api/comments/services/1/stream?ticket="+mintTicket(t, ts.URL))
+	if res.StatusCode != 200 || !strings.HasPrefix(body, "event: sources\ndata: []") {
+		t.Fatalf("ticketed stream = %d %q", res.StatusCode, body[:min(len(body), 40)])
+	}
+}
+
+func mintTicket(t *testing.T, baseURL string) string {
+	t.Helper()
+	req, _ := http.NewRequest("POST", baseURL+"/api/auth/ticket", nil)
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("u:stoken")))
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	var body struct {
+		Ticket string `json:"ticket"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil || body.Ticket == "" {
+		t.Fatalf("mint = %d %q", res.StatusCode, raw)
+	}
+	return body.Ticket
+}
+
+func getStream(t *testing.T, url string) (status int, body string) {
+	t.Helper()
+	res, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	return res.StatusCode, string(raw)
+}
+
+func TestResolveChannelID(t *testing.T) {
+	st := newStore(t)
+	addMapping := func(channel string, enabled bool, assignments string) {
+		t.Helper()
+		if _, err := st.Add(store.ColLiveComment, []byte(
+			`{"channel":"`+channel+`","assignments":[`+assignments+`],"enabled":`+fmt.Sprint(enabled)+`}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	addMapping("gr026", false, `{"source":"nicolive","channelId":"ch-disabled"}`)
+	addMapping("gr999", true, `{"source":"nicolive","channelId":"ch-other"}`)
+	addMapping("gr026", true, `{"source":"nx-jikkyo","channelId":"jk26"}`)
+	addMapping("gr026", true, `{"source":"nicolive","channelId":"ch2646436"}`)
+	// Seeded last (newest → iterated first by created_at DESC) so a
+	// short-circuit regression that returns unsupported on a no-assignment
+	// mapping would actually fail this test.
+	time.Sleep(2 * time.Millisecond)
+	addMapping("gr026", true, ``) // matching channel, no nicolive assignment
+
+	resolve := resolveChannelID(st, "nicolive")
+	got, ok := resolve(comments.Target{Channel: "gr026"})
+	if !ok || got != "ch2646436" {
+		t.Fatalf("nicolive = %q %v, want ch2646436 (first enabled mapping WITH an assignment for the source)", got, ok)
+	}
+
+	resolveNx := resolveChannelID(st, "nx-jikkyo")
+	got, ok = resolveNx(comments.Target{Channel: "gr026"})
+	if !ok || got != "jk26" {
+		t.Fatalf("nx-jikkyo = %q %v, want jk26", got, ok)
+	}
+
+	if _, ok := resolve(comments.Target{Channel: "gr001"}); ok {
+		t.Fatal("unmapped channel must resolve to unsupported")
+	}
+	if _, ok := resolve(comments.Target{Channel: ""}); ok {
+		t.Fatal("channel-less target must resolve to unsupported")
 	}
 }

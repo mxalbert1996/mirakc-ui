@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mxalbert1996/mirakc-ui/server-go/internal/api"
+	"github.com/mxalbert1996/mirakc-ui/server-go/internal/comments"
 	"github.com/mxalbert1996/mirakc-ui/server-go/internal/httpapi"
 	"github.com/mxalbert1996/mirakc-ui/server-go/internal/keyword"
 	"github.com/mxalbert1996/mirakc-ui/server-go/internal/mirakc"
@@ -104,6 +105,13 @@ func New(ctx context.Context, d Deps) *App {
 		},
 		MirakcProxy: proxy,
 		Programs:    programs,
+		Comments: comments.NewHandler(comments.Deps{
+			APIURL: apiURLOrEmpty(d.MirakcURL),
+			Sources: []comments.Source{
+				comments.NewNicoliveSource(resolveChannelID(d.Store, "nicolive")),
+				comments.NewNxJikkyoSource(resolveChannelID(d.Store, "nx-jikkyo")),
+			},
+		}),
 	})
 
 	appCtx, cancel := context.WithCancel(ctx)
@@ -133,6 +141,44 @@ func (a *App) Stop() {
 	a.cancel()
 	if a.job != nil {
 		a.job.Stop()
+	}
+}
+
+// apiURLOrEmpty keeps the comments 503 convention intact when MIRAKC_URL
+// is unset: the handler distinguishes "" from a real API base.
+func apiURLOrEmpty(mirakcURL string) string {
+	if mirakcURL == "" {
+		return ""
+	}
+	return mirakc.APIURL(mirakcURL)
+}
+
+// resolveChannelID is main.ts's resolveChannelId: enabled live-comment
+// mappings whose channel matches, first assignment for this source wins.
+func resolveChannelID(st *store.Store, source string) comments.ResolveChannel {
+	return func(target comments.Target) (string, bool) {
+		if target.Channel == "" {
+			return "", false
+		}
+		records, err := st.List(store.ColLiveComment)
+		if err != nil {
+			return "", false
+		}
+		for _, rec := range records {
+			var mapping api.LiveCommentMapping
+			if json.Unmarshal(rec.Data, &mapping) != nil {
+				continue
+			}
+			if !mapping.Enabled || mapping.Channel != target.Channel {
+				continue
+			}
+			for _, a := range mapping.Assignments {
+				if string(a.Source) == source {
+					return a.ChannelId, true
+				}
+			}
+		}
+		return "", false
 	}
 }
 
