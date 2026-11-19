@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import Notification from "./Notification.tsx";
-import { DEFAULT_NOTIFICATION_SETTINGS } from "../../../server/lib/notification-settings.ts";
+import { DEFAULT_NOTIFICATION_SETTINGS } from "../../lib/api/notification-settings.ts";
 
 const meta = {
   title: "templates/Notification",
@@ -10,9 +10,8 @@ const meta = {
     settings: {
       ...DEFAULT_NOTIFICATION_SETTINGS,
       url: "https://ntfy.sh/mirakc-rec",
-      token: "tk_xxxxxxxxxxxxxxxx",
-      discordWebhookUrl:
-        "https://discord.com/api/webhooks/123456789012345678/abcdef",
+      tokenSet: true,
+      discordWebhookUrlSet: true,
       onSchedule: true,
       onStart: true,
       onEnd: true,

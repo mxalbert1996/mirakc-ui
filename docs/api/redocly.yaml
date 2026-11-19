@@ -11,7 +11,8 @@ rules:
   no-invalid-media-type-examples: off
   operation-2xx-response: off
   operation-4xx-response: off
-  # 内部 API は LAN 内の個人用アプリ前提で無認証のため、security の定義を要求しない。
+  # 内部 API の認証は AUTH_TOKEN 環境変数で有効化する任意のものであるため、
+  # security の定義を要求しない。
   security-defined: off
   ansanloms/operation-id-naming: error
   ansanloms/description-file-naming: error

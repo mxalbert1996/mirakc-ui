@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import WatchPlayer from "./Player.tsx";
 import { sampleLiveComments } from "../../../lib/fixtures.ts";
 import { t } from "../../../locales/i18n.ts";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 // Player.tsx は `import("mpegts.js")` (esm.sh URL) / `import("aribb24.js")` (npm)
 // を動的 import する。mpegts.js は vitest.config.ts の test.alias でローカル
@@ -306,5 +310,225 @@ describe("WatchPlayer", () => {
     const playSpy = vi.spyOn(video!, "play").mockResolvedValue(undefined);
     fireEvent.pause(video!);
     expect(playSpy).toHaveBeenCalled();
+  });
+});
+
+// チケット付与の検証は上記 pending ローダーでは止まってしまうため、解決する
+// フェイクで init() を最後まで実行し、mpegts.createPlayer へ渡った URL を見る。
+describe("WatchPlayer チケット", () => {
+  function fakeMpegts() {
+    const createPlayer = vi.fn(() => ({
+      on: vi.fn(),
+      attachMediaElement: vi.fn(),
+      load: vi.fn(),
+      play: vi.fn(() => Promise.resolve()),
+      pause: vi.fn(),
+      unload: vi.fn(),
+      detachMediaElement: vi.fn(),
+      destroy: vi.fn(),
+    }));
+    const loader = () =>
+      Promise.resolve({
+        default: {
+          isSupported: () => true,
+          createPlayer,
+          Events: {
+            ERROR: "ERROR",
+            PES_PRIVATE_DATA_ARRIVED: "PES_PRIVATE_DATA_ARRIVED",
+            TIMED_ID3_METADATA_ARRIVED: "TIMED_ID3_METADATA_ARRIVED",
+          },
+        },
+      });
+    return { createPlayer, loader };
+  }
+
+  const fakeAribb24 = () =>
+    Promise.resolve({
+      Controller: class {
+        attachFeeder() {}
+        attachRenderer() {}
+        attachMedia() {}
+        show() {}
+        hide() {}
+        detachMedia() {}
+        detachFeeder() {}
+        detachRenderer() {}
+      },
+      MPEGTSFeeder: class {},
+      CanvasMainThreadRenderer: class {
+        destroy() {}
+      },
+    });
+
+  function stubTicket(ticket: string | null) {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ ticket }),
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  /**
+   * チケット取得を保留させて手動で解決するモック。解決前に unmount 等を行う
+   * 破棄レースの検証に使う。
+   */
+  function stubDeferredTicketFetch() {
+    const resolvers: Array<(ticket: string | null) => void> = [];
+    const fetchMock = vi.fn(() =>
+      new Promise((resolve) => {
+        resolvers.push((ticket) =>
+          resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ ticket }),
+          })
+        );
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return {
+      fetchMock,
+      /** index 番目の呼び出しを ticket で解決する。 */
+      resolve: (index: number, ticket: string | null) => {
+        resolvers[index]?.(ticket);
+      },
+    };
+  }
+
+  async function flush() {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  function ticketProps(
+    loader: ReturnType<typeof fakeMpegts>["loader"],
+    streamUrl: string,
+  ): Props {
+    return baseProps({
+      streamUrl,
+      loadMpegts: loader as unknown as NonNullable<Props["loadMpegts"]>,
+      loadAribb24: fakeAribb24 as unknown as NonNullable<
+        Props["loadAribb24"]
+      >,
+    });
+  }
+
+  it("チケットが返れば既存クエリの後に ticket を付けて mpegts へ渡す", async () => {
+    stubTicket("abc123");
+    const { createPlayer, loader } = fakeMpegts();
+    render(
+      <WatchPlayer
+        {...ticketProps(
+          loader,
+          "/api/transcode/services/1024?audioTrack=0&quality=720p",
+        )}
+      />,
+    );
+    await flush();
+    expect(createPlayer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url:
+          "/api/transcode/services/1024?audioTrack=0&quality=720p&ticket=abc123",
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("チケットが null なら streamUrl はそのまま (認証無効)", async () => {
+    stubTicket(null);
+    const { createPlayer, loader } = fakeMpegts();
+    render(
+      <WatchPlayer {...ticketProps(loader, "/api/transcode/services/1024")} />,
+    );
+    await flush();
+    expect(createPlayer).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "/api/transcode/services/1024" }),
+      expect.anything(),
+    );
+  });
+
+  it("streamUrl 再構築 (画質/音声切替) でチケットを取り直す", async () => {
+    const fetchMock = stubTicket("t1");
+    const { createPlayer, loader } = fakeMpegts();
+    const { rerender } = render(
+      <WatchPlayer
+        {...ticketProps(loader, "/api/transcode/services/1024")}
+      />,
+    );
+    await flush();
+    rerender(
+      <WatchPlayer
+        {...ticketProps(
+          loader,
+          "/api/transcode/services/1024?audioTrack=1&quality=1080p",
+        )}
+      />,
+    );
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(createPlayer).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        url:
+          "/api/transcode/services/1024?audioTrack=1&quality=1080p&ticket=t1",
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("チケット取得中に unmount しても createPlayer を呼ばない", async () => {
+    const { fetchMock, resolve } = stubDeferredTicketFetch();
+    const { createPlayer, loader } = fakeMpegts();
+    const { unmount } = render(
+      <WatchPlayer
+        {...ticketProps(loader, "/api/transcode/services/1024")}
+      />,
+    );
+    // mpegts / aribb24 モジュールは読み終え、チケット取得で init() が止まる。
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    unmount();
+    resolve(0, "t1");
+    await flush();
+    // destroyed ガードが解決後の初期化を止め、playerRef への代入も起きない。
+    expect(createPlayer).not.toHaveBeenCalled();
+  });
+
+  it("チケット取得中に streamUrl が組み替われば旧取得を破棄して新分だけ開く", async () => {
+    const { resolve } = stubDeferredTicketFetch();
+    const { createPlayer, loader } = fakeMpegts();
+    const { rerender } = render(
+      <WatchPlayer
+        {...ticketProps(loader, "/api/transcode/services/1024")}
+      />,
+    );
+    await flush();
+    rerender(
+      <WatchPlayer
+        {...ticketProps(
+          loader,
+          "/api/transcode/services/1024?audioTrack=1&quality=1080p",
+        )}
+      />,
+    );
+    // 旧 effect 分の取得を解決しても destroyed なので createPlayer しない。
+    resolve(0, "old");
+    await flush();
+    expect(createPlayer).not.toHaveBeenCalled();
+    // 新 effect 分の取得だけが新しい URL で開く。
+    resolve(1, "new");
+    await flush();
+    expect(createPlayer).toHaveBeenCalledTimes(1);
+    expect(createPlayer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url:
+          "/api/transcode/services/1024?audioTrack=1&quality=1080p&ticket=new",
+      }),
+      expect.anything(),
+    );
   });
 });

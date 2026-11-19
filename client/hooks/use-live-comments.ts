@@ -5,6 +5,7 @@ import type {
 } from "../../server/lib/comments/types.ts";
 import type { LiveComment } from "../lib/live-comment.ts";
 import { formatHm } from "../lib/datetime.ts";
+import { fetchStreamTicket, withTicketParam } from "../lib/api/tickets.ts";
 
 /**
  * 実況コメントの供給。
@@ -72,43 +73,64 @@ export function useLiveComments(
       return;
     }
 
-    const url = `/api/comments/services/${serviceId}/stream`;
-    const source = createEventSource !== undefined
-      ? createEventSource(url)
-      : new EventSource(url);
+    // EventSource には Authorization ヘッダを渡せないため、開く前にワンタイム
+    // チケットを取得して URL に付ける (認証無効なら URL は不変)。effect の再実行
+    // (サービス切替) のたびに新たに取得する。EventSource の自動再接続は同じ URL
+    // を再利用するため、チケットはサーバ側で複数回使える。
+    let opened: EventSource | undefined;
+    let cancelled = false;
 
-    const onSources = (event: MessageEvent) => {
-      let list: unknown;
-      try {
-        list = JSON.parse(event.data);
-      } catch {
+    const open = async () => {
+      const ticket = await fetchStreamTicket();
+      if (cancelled) {
         return;
       }
-      if (!Array.isArray(list) || list.length === 0) {
-        // 実況非対応チャンネル。再接続しても変わらないため閉じる。
-        setConnected(false);
-        source.close();
-        return;
-      }
-      setConnected(true);
-      setSources(list as CommentSourceId[]);
-    };
-    const onComment = (event: MessageEvent) => {
-      try {
-        const comment: SourceComment = JSON.parse(event.data);
-        setComments((prev) => [...prev, toLiveComment(comment)].slice(-limit));
-      } catch {
-        // 不正なイベントは無視
-      }
-    };
+      const url = withTicketParam(
+        `/api/comments/services/${serviceId}/stream`,
+        ticket,
+      );
+      const source = createEventSource !== undefined
+        ? createEventSource(url)
+        : new EventSource(url);
+      opened = source;
 
-    source.addEventListener("sources", onSources);
-    source.addEventListener("comment", onComment);
-    // 切断時は EventSource が自動再接続し、再接続後に sources が再送される。
-    source.onerror = () => setConnected(false);
+      const onSources = (event: MessageEvent) => {
+        let list: unknown;
+        try {
+          list = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if (!Array.isArray(list) || list.length === 0) {
+          // 実況非対応チャンネル。再接続しても変わらないため閉じる。
+          setConnected(false);
+          source.close();
+          return;
+        }
+        setConnected(true);
+        setSources(list as CommentSourceId[]);
+      };
+      const onComment = (event: MessageEvent) => {
+        try {
+          const comment: SourceComment = JSON.parse(event.data);
+          setComments((prev) =>
+            [...prev, toLiveComment(comment)].slice(-limit)
+          );
+        } catch {
+          // 不正なイベントは無視
+        }
+      };
+
+      source.addEventListener("sources", onSources);
+      source.addEventListener("comment", onComment);
+      // 切断時は EventSource が自動再接続し、再接続後に sources が再送される。
+      source.onerror = () => setConnected(false);
+    };
+    open();
 
     return () => {
-      source.close();
+      cancelled = true;
+      opened?.close();
     };
   }, [serviceId, createEventSource, limit]);
 

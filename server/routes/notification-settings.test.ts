@@ -33,15 +33,49 @@ function fakeSender(result: boolean) {
   };
 }
 
-Deno.test("GET /: 設定を返す (未保存なら既定値)", async () => {
+Deno.test("GET /: マスク済みの設定を返す (未保存なら既定値)", async () => {
   const app = createNotificationSettingsRoutes(fakeStore(), fakeSender(true));
 
   const res = await app.request("/");
   assertEquals(res.status, 200);
-  assertEquals(await res.json(), DEFAULT_NOTIFICATION_SETTINGS);
+  assertEquals(await res.json(), {
+    url: "",
+    tokenSet: false,
+    discordWebhookUrlSet: false,
+    onSchedule: false,
+    onStart: false,
+    onEnd: false,
+    onFail: false,
+    onRemove: false,
+  });
 });
 
-Deno.test("PUT /: 設定を保存して返す", async () => {
+Deno.test("GET /: シークレットが設定済みなら Set が true になる", async () => {
+  const app = createNotificationSettingsRoutes(
+    fakeStore({
+      ...DEFAULT_NOTIFICATION_SETTINGS,
+      url: "https://ntfy.sh/x",
+      token: "tk",
+      discordWebhookUrl: "https://discord.com/api/webhooks/123/abc",
+    }),
+    fakeSender(true),
+  );
+
+  const res = await app.request("/");
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), {
+    url: "https://ntfy.sh/x",
+    tokenSet: true,
+    discordWebhookUrlSet: true,
+    onSchedule: false,
+    onStart: false,
+    onEnd: false,
+    onFail: false,
+    onRemove: false,
+  });
+});
+
+Deno.test("PUT /: 設定を保存してマスク済みの View を返す", async () => {
   const store = fakeStore();
   const app = createNotificationSettingsRoutes(store, fakeSender(true));
 
@@ -56,9 +90,143 @@ Deno.test("PUT /: 設定を保存して返す", async () => {
     }),
   });
   assertEquals(res.status, 200);
-  const body = await res.json();
-  assertEquals(body.url, "https://ntfy.sh/mirakc-rec");
-  assertEquals(await store.get(), body);
+  assertEquals(await res.json(), {
+    url: "https://ntfy.sh/mirakc-rec",
+    tokenSet: true,
+    discordWebhookUrlSet: false,
+    onSchedule: false,
+    onStart: true,
+    onEnd: false,
+    onFail: false,
+    onRemove: false,
+  });
+  // ストアには平文のまま保存される。
+  assertEquals(await store.get(), {
+    url: "https://ntfy.sh/mirakc-rec",
+    token: "tk",
+    discordWebhookUrl: "",
+    onSchedule: false,
+    onStart: true,
+    onEnd: false,
+    onFail: false,
+    onRemove: false,
+  });
+});
+
+Deno.test("PUT /: シークレットは未指定・空文字なら保持する", async () => {
+  const initial: NotificationSettings = {
+    ...DEFAULT_NOTIFICATION_SETTINGS,
+    url: "https://ntfy.sh/x",
+    token: "tk_old",
+    discordWebhookUrl: "https://discord.com/api/webhooks/123/abc",
+  };
+  const store = fakeStore(initial);
+  const app = createNotificationSettingsRoutes(store, fakeSender(true));
+
+  for (
+    const body of [
+      { url: initial.url, onSchedule: true },
+      { url: initial.url, token: "", discordWebhookUrl: "", onSchedule: true },
+    ]
+  ) {
+    const res = await app.request("/", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    assertEquals(res.status, 200, JSON.stringify(body));
+    assertEquals(await res.json(), {
+      url: initial.url,
+      tokenSet: true,
+      discordWebhookUrlSet: true,
+      onSchedule: true,
+      onStart: false,
+      onEnd: false,
+      onFail: false,
+      onRemove: false,
+    }, JSON.stringify(body));
+    assertEquals((await store.get()).token, "tk_old", JSON.stringify(body));
+    assertEquals(
+      (await store.get()).discordWebhookUrl,
+      initial.discordWebhookUrl,
+      JSON.stringify(body),
+    );
+  }
+});
+
+Deno.test("PUT /: シークレットの非空文字は置き換え、明示的な null は空にする", async () => {
+  const initial: NotificationSettings = {
+    ...DEFAULT_NOTIFICATION_SETTINGS,
+    url: "https://ntfy.sh/x",
+    token: "tk_old",
+    discordWebhookUrl: "https://discord.com/api/webhooks/123/abc",
+  };
+
+  const replacedStore = fakeStore(initial);
+  const replacedApp = createNotificationSettingsRoutes(
+    replacedStore,
+    fakeSender(true),
+  );
+  const replaced = await replacedApp.request("/", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: initial.url,
+      token: "tk_new",
+      discordWebhookUrl: "https://discord.com/api/webhooks/456/def",
+    }),
+  });
+  assertEquals(replaced.status, 200);
+  const replacedSettings = await replacedStore.get();
+  assertEquals(replacedSettings.token, "tk_new");
+  assertEquals(
+    replacedSettings.discordWebhookUrl,
+    "https://discord.com/api/webhooks/456/def",
+  );
+
+  const clearedStore = fakeStore(initial);
+  const clearedApp = createNotificationSettingsRoutes(
+    clearedStore,
+    fakeSender(true),
+  );
+  const cleared = await clearedApp.request("/", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: initial.url,
+      token: null,
+      discordWebhookUrl: null,
+    }),
+  });
+  assertEquals(cleared.status, 200);
+  const clearedSettings = await clearedStore.get();
+  assertEquals(clearedSettings.token, "");
+  assertEquals(clearedSettings.discordWebhookUrl, "");
+  // 応答も Set が false に変わる。
+  const clearedView = await cleared.json();
+  assertEquals(clearedView.tokenSet, false);
+  assertEquals(clearedView.discordWebhookUrlSet, false);
+});
+
+Deno.test("PUT /: 保持した Discord Webhook があればイベント有効でも保存できる", async () => {
+  const initial: NotificationSettings = {
+    ...DEFAULT_NOTIFICATION_SETTINGS,
+    discordWebhookUrl: "https://discord.com/api/webhooks/123/abc",
+  };
+  const app = createNotificationSettingsRoutes(
+    fakeStore(initial),
+    fakeSender(true),
+  );
+
+  // url は空のまま onStart を有効にする。シークレット未指定 (= 保持) のため
+  // 保持した Webhook が通知先として成立する。
+  const res = await app.request("/", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: "", onStart: true }),
+  });
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).discordWebhookUrlSet, true);
 });
 
 Deno.test("PUT /: 不正な入力は 400", async () => {
@@ -66,9 +234,15 @@ Deno.test("PUT /: 不正な入力は 400", async () => {
 
   const bodies = [
     {},
-    // イベント有効なのに url が空。
+    // イベント有効なのに通知先がゼロ (現行値も空)。
     { url: "", token: "", onStart: true, onEnd: false },
     { url: "not a url", token: "", onStart: false, onEnd: false },
+    {
+      url: "",
+      token: "",
+      discordWebhookUrl: "https://example.com/x",
+      onStart: false,
+    },
   ];
   for (const body of bodies) {
     const res = await app.request("/", {
@@ -141,12 +315,14 @@ Deno.test("POST /test/ntfy: 不正な URL は 400、送信失敗は 502", async 
 
 Deno.test("POST /test/discord: 不正な webhookUrl は 400、送信失敗は 502", async () => {
   const sender = fakeSender(true);
-  const invalid = await createNotificationSettingsRoutes(fakeStore(), sender)
-    .request("/test/discord", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ webhookUrl: "https://example.com/not-a-webhook" }),
-    });
+  const invalid = await createNotificationSettingsRoutes(
+    fakeStore(),
+    sender,
+  ).request("/test/discord", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ webhookUrl: "https://example.com/not-a-webhook" }),
+  });
   assertEquals(invalid.status, 400);
   await invalid.body?.cancel();
   assertEquals(sender.discord, []);

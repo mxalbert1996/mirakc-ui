@@ -92,6 +92,7 @@
     "dev:client": "deno task vite",
     "build": "deno task vite build",
     "start": "deno serve -A --env-file=./.env --port 8000 server/main.ts",
+    "export:data": "deno run -A server/export-data.ts",
     "generate": "deno task generate:*",
     "generate:mirakc": "deno task openapi-typescript $MIRAKC_URL/api/docs --output ./client/lib/api/schema.d.ts",
     "generate:internal": "npm --prefix ./docs/api run bundle:json && npm --prefix ./docs/api run emit-server-schemas -- ../../server/lib/api/internal-schemas.ts",

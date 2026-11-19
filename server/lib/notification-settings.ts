@@ -25,15 +25,56 @@ export const NOTIFICATION_EVENT_KEYS = [
 export type NotificationEventKey = (typeof NOTIFICATION_EVENT_KEYS)[number];
 
 /**
- * 通知設定。docs/api の OpenAPI から生成した component schema
- * (internal-schemas.ts) を型の単一ソースとする。通知先 (ntfy の url / token、
- * Discord の discordWebhookUrl) と onSchedule / onStart / onEnd / onFail /
- * onRemove のトグルを持つ。トグルは通知先で共有し、ON のイベントを設定済みの
- * 全通知先へ送る。
+ * 保存 API の入力 (docs/api の OpenAPI から生成した component schema が単一
+ * ソース)。シークレット 2 項目 (token / discordWebhookUrl) とトグルは省略可で、
+ * PUT はこの入力を現行値とマージして保存する (mergeNotificationSettings)。
  */
-export type NotificationSettings = FromSchema<
+export type NotificationSettingsInput = FromSchema<
   typeof internalSchemas["NotificationSettings"]
 >;
+
+/**
+ * 通知設定 (ストア内部形式)。入力スキーマを基に、書き込み専用のシークレット
+ * 2 項目 (token / discordWebhookUrl) とトグルを必須の平文に狭めたもの。API の
+ * 応答はマスク済みの NotificationSettingsView に変換して返すため、平文の
+ * シークレットが API 面に出ることは無い。トグルは通知先で共有し、ON の
+ * イベントを設定済みの全通知先へ送る。
+ */
+export type NotificationSettings =
+  & Omit<
+    NotificationSettingsInput,
+    "token" | "discordWebhookUrl" | NotificationEventKey
+  >
+  & {
+    token: string;
+    discordWebhookUrl: string;
+    onSchedule: boolean;
+    onStart: boolean;
+    onEnd: boolean;
+    onFail: boolean;
+    onRemove: boolean;
+  };
+
+/**
+ * 通知設定の API 応答形式 (マスク済み)。シークレット 2 項目は値を出さず、
+ * 設定済みかどうか (tokenSet / discordWebhookUrlSet) だけを返す。
+ */
+export type NotificationSettingsView = FromSchema<
+  typeof internalSchemas["NotificationSettingsView"]
+>;
+
+/** ストア内の設定を API 応答用のマスク済み View に変換する。 */
+export function toNotificationSettingsView(
+  settings: NotificationSettings,
+): NotificationSettingsView {
+  const { token: _token, discordWebhookUrl: _discordWebhookUrl, ...rest } =
+    settings;
+  return {
+    ...rest,
+    tokenSet: settings.token !== "",
+    discordWebhookUrlSet: settings.discordWebhookUrl !== "",
+  };
+}
 
 /** 未保存時の既定値。通知はすべて無効。 */
 export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
@@ -161,61 +202,77 @@ export function hasEnabledDestination(
       isValidDiscordWebhookUrl(settings.discordWebhookUrl));
 }
 
+/**
+ * PUT の入力をマージ前の形に正規化したもの (parseNotificationSettingsInput
+ * の結果)。シークレット 2 項目は undefined (保存済みの値を保持) / null (空に
+ * する) / 非 empty 文字列 (置き換え) の 3 択で、他はすべて値が確定している。
+ */
+export type NotificationSettingsDraft = {
+  url: string;
+  token: string | null | undefined;
+  discordWebhookUrl: string | null | undefined;
+  onSchedule: boolean;
+  onStart: boolean;
+  onEnd: boolean;
+  onFail: boolean;
+  onRemove: boolean;
+};
+
 export type ParseResult =
-  | { ok: true; input: NotificationSettings }
+  | { ok: true; input: NotificationSettingsDraft }
   | { ok: false; error: string };
 
-/** value が NotificationSettings スキーマに適合するかを判定する型ガード。 */
-function isNotificationSettings(value: unknown): value is NotificationSettings {
+export type MergeResult =
+  | { ok: true; settings: NotificationSettings }
+  | { ok: false; error: string };
+
+/** value が NotificationSettings 入力スキーマに適合するかを判定する型ガード。 */
+function isNotificationSettingsInput(
+  value: unknown,
+): value is NotificationSettingsInput {
   return matchesSchema("NotificationSettings", value);
 }
 
 /**
- * API 入力をバリデーションして正規化する。url / token / discordWebhookUrl は
- * trim、トグルは未指定なら false。イベントが 1 つでも有効なら通知先 (ntfy URL
- * か Discord Webhook) が少なくとも 1 つ必須。各 URL は非空なら (イベントがすべて
- * 無効でも) 形式を検証し、壊れた URL の保存を防ぐ。
+ * シークレット入力を draft の合図に正規化する。未指定・空白のみは「保持」
+ * (undefined)、明示的な null は「空にする」(null)、非空文字列は trim して
+ * 「置き換え」の値にする。
+ */
+function canonicalSecret(
+  value: string | null | undefined,
+): string | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  if (value === undefined || value.trim() === "") {
+    return undefined;
+  }
+  return value.trim();
+}
+
+/**
+ * API 入力をバリデーションして正規化する。url は trim、トグルは未指定なら
+ * false、シークレットは canonicalSecret の合図に直す。各 URL は非空なら
+ * (イベントがすべて無効でも) 形式を検証し、壊れた URL の保存を防ぐ。
+ * 「イベントが 1 つでも有効なら通知先必須」は保持した現行値との突合が
+ * 必要なため mergeNotificationSettings 側で判定する。
  */
 export function parseNotificationSettingsInput(value: unknown): ParseResult {
-  // OpenAPI スキーマは全トグルと discordWebhookUrl を required にしているため、
-  // 未指定のトグルを false、discordWebhookUrl を "" で補ってから構造検証する
-  // (未指定は無効という既定の挙動を保つ)。
-  let candidate: unknown = value;
-  if (typeof value === "object" && value !== null) {
-    const copy: Record<string, unknown> = { ...value };
-    for (const key of NOTIFICATION_EVENT_KEYS) {
-      if (copy[key] === undefined) {
-        copy[key] = false;
-      }
-    }
-    if (copy.discordWebhookUrl === undefined) {
-      copy.discordWebhookUrl = "";
-    }
-    candidate = copy;
-  }
-
-  if (!isNotificationSettings(candidate)) {
+  if (!isNotificationSettingsInput(value)) {
     return {
       ok: false,
-      error: schemaErrorOf("NotificationSettings", candidate),
+      error: schemaErrorOf("NotificationSettings", value),
     };
   }
 
-  const url = candidate.url.trim();
-  const discordWebhookUrl = candidate.discordWebhookUrl.trim();
-  const anyEvent = NOTIFICATION_EVENT_KEYS.some((key) => candidate[key]);
-  if (anyEvent && url === "" && discordWebhookUrl === "") {
-    return {
-      ok: false,
-      error:
-        "a destination (ntfy url or discord webhook) is required when notification is enabled",
-    };
-  }
+  const url = value.url.trim();
   if (url !== "" && !isValidNtfyUrl(url)) {
     return { ok: false, error: "url must be a http(s) URL with a topic" };
   }
+  const discordWebhookUrl = canonicalSecret(value.discordWebhookUrl);
   if (
-    discordWebhookUrl !== "" && !isValidDiscordWebhookUrl(discordWebhookUrl)
+    discordWebhookUrl !== undefined && discordWebhookUrl !== null &&
+    !isValidDiscordWebhookUrl(discordWebhookUrl)
   ) {
     return {
       ok: false,
@@ -227,13 +284,46 @@ export function parseNotificationSettingsInput(value: unknown): ParseResult {
     ok: true,
     input: {
       url,
-      token: candidate.token.trim(),
+      token: canonicalSecret(value.token),
       discordWebhookUrl,
-      onSchedule: candidate.onSchedule,
-      onStart: candidate.onStart,
-      onEnd: candidate.onEnd,
-      onFail: candidate.onFail,
-      onRemove: candidate.onRemove,
+      onSchedule: value.onSchedule ?? false,
+      onStart: value.onStart ?? false,
+      onEnd: value.onEnd ?? false,
+      onFail: value.onFail ?? false,
+      onRemove: value.onRemove ?? false,
     },
   };
+}
+
+/**
+ * draft を現行値 current にマージして、保存する設定 (平文のまま) を組む。
+ * シークレット 2 項目は保持 (undefined)・空にする (null)・置き換え (非空) を
+ * 解決したうえで、「イベントが 1 つでも有効なら通知先 (ntfy の url か
+ * Discord の webhook) が少なくとも 1 つ必須」をマージ後の値で判定する。
+ */
+export function mergeNotificationSettings(
+  current: NotificationSettings,
+  draft: NotificationSettingsDraft,
+): MergeResult {
+  const settings: NotificationSettings = {
+    url: draft.url,
+    token: draft.token === undefined ? current.token : draft.token ?? "",
+    discordWebhookUrl: draft.discordWebhookUrl === undefined
+      ? current.discordWebhookUrl
+      : draft.discordWebhookUrl ?? "",
+    onSchedule: draft.onSchedule,
+    onStart: draft.onStart,
+    onEnd: draft.onEnd,
+    onFail: draft.onFail,
+    onRemove: draft.onRemove,
+  };
+  const anyEvent = NOTIFICATION_EVENT_KEYS.some((key) => settings[key]);
+  if (anyEvent && settings.url === "" && settings.discordWebhookUrl === "") {
+    return {
+      ok: false,
+      error:
+        "a destination (ntfy url or discord webhook) is required when notification is enabled",
+    };
+  }
+  return { ok: true, settings };
 }

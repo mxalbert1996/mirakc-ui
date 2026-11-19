@@ -10,6 +10,10 @@ import { genreOf, genreVars } from "../../../lib/genre.ts";
 import type { LiveComment } from "../../../lib/live-comment.ts";
 import type { CommentSourceId } from "../../../../server/lib/comments/types.ts";
 import { t } from "../../../locales/i18n.ts";
+import {
+  fetchStreamTicket,
+  withTicketParam,
+} from "../../../lib/api/tickets.ts";
 import Icon from "../../atoms/Icon.tsx";
 import ChannelBadge from "../../atoms/ChannelBadge.tsx";
 import CommentFeed from "./CommentFeed.tsx";
@@ -235,6 +239,10 @@ export default function WatchPlayer(props: Props) {
     setError(undefined);
     setBuffering(true);
 
+    // effect ガードで非 undefined を通過したストリーム URL。非同期の init() に
+    // narrowed 型で伝える。
+    const streamUrl = props.streamUrl;
+
     let destroyed = false;
 
     // 実際の再生状態に追従して受信中オーバーレイを出し入れする。
@@ -287,12 +295,20 @@ export default function WatchPlayer(props: Props) {
         return;
       }
 
+      // mpegts.js も Authorization ヘッダを送れないため、開く直前にワンタイム
+      // チケットを取得して URL に付ける (認証無効なら URL は不変)。effect の再実行
+      // (画質/音声切替・再試行) のたびにここを通り、新たなチケットを取る。
+      const ticket = await fetchStreamTicket();
+      if (destroyed) {
+        return;
+      }
+
       // mpegts.js プレーヤー初期化
       const player = mpegts.createPlayer(
         {
           type: "mpegts",
           isLive: true,
-          url: props.streamUrl,
+          url: withTicketParam(streamUrl, ticket),
         },
         {
           enableStashBuffer: false,

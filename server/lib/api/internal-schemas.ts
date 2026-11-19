@@ -5,6 +5,24 @@
 // 型 (json-schema-to-ts の FromSchema) と検証 (@cfworker/json-schema) を得る。
 
 export const internalSchemas = {
+  "AuthTicketResponse": {
+    "type": "object",
+    "additionalProperties": false,
+    "description": "ワンタイムチケットの発行応答。\n\nEventSource と mpegts.js はリクエストヘッダを設定できないため、ストリームの取得ではこのチケットを `ticket` クエリパラメータで渡す。チケットは発行から約 60 秒・最大 5 回の使用で失効する。\n",
+    "required": [
+      "ticket"
+    ],
+    "properties": {
+      "ticket": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "発行したワンタイムチケット。AUTH_TOKEN が未設定 (認証無効) の場合は null になる。",
+        "example": "kZ8vF2q0T4mN6xY3wU9sB1aC"
+      }
+    }
+  },
   "KeywordRule": {
     "type": "object",
     "additionalProperties": false,
@@ -257,11 +275,66 @@ export const internalSchemas = {
   "NotificationSettings": {
     "type": "object",
     "additionalProperties": false,
-    "description": "ntfy/Discord への録画イベント通知の設定。\n\n各イベントのトグルが 1 つでも有効な場合は、通知先 (ntfy の `url` または Discord の `discordWebhookUrl`) の少なくとも一方が必須となる。\n",
+    "description": "ntfy/Discord への録画イベント通知の設定 (保存 API の入力)。\n\n`token` と `discordWebhookUrl` は書き込み専用の秘密情報で、応答には値を出さない。未指定または空文字なら保存済みの値を保持し、非空文字なら置き換え、明示的な `null` なら空にする。\n\n各イベントのトグルが 1 つでも有効な場合は、通知先 (ntfy の `url` または Discord の `discordWebhookUrl`) の少なくとも一方が必須となる。\n",
+    "required": [
+      "url"
+    ],
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "通知先 ntfy のトピックまで含む URL。空文字は ntfy への通知を無効にすることを表す。",
+        "example": "https://ntfy.sh/mirakc-rec"
+      },
+      "token": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "ntfy のアクセストークン。Authorization ヘッダの Bearer として送信する。書き込み専用で、未指定または空文字は保存済みの値を保持し、非空文字は置き換え、明示的な null は空にする。"
+      },
+      "discordWebhookUrl": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "通知先 Discord の Incoming Webhook URL。書き込み専用で、未指定または空文字は保存済みの値を保持し、非空文字は置き換え、明示的な null は空にする。",
+        "example": "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz"
+      },
+      "onSchedule": {
+        "type": "boolean",
+        "default": false,
+        "description": "録画予約の登録 (キーワード自動録画と手動) を通知するか。未指定は無効。"
+      },
+      "onStart": {
+        "type": "boolean",
+        "default": false,
+        "description": "録画開始を通知するか。未指定は無効。"
+      },
+      "onEnd": {
+        "type": "boolean",
+        "default": false,
+        "description": "録画終了を通知するか。未指定は無効。"
+      },
+      "onFail": {
+        "type": "boolean",
+        "default": false,
+        "description": "録画失敗を通知するか。未指定は無効。"
+      },
+      "onRemove": {
+        "type": "boolean",
+        "default": false,
+        "description": "録画予約の削除を通知するか。未指定は無効。"
+      }
+    }
+  },
+  "NotificationSettingsView": {
+    "type": "object",
+    "additionalProperties": false,
+    "description": "ntfy/Discord への録画イベント通知の設定 (応答の形式)。\n\n`token` と `discordWebhookUrl` は書き込み専用の秘密情報であるため、値のかわりに `tokenSet` と `discordWebhookUrlSet` で設定済みかどうかだけを返す。未保存の場合は通知をすべて無効にした既定値になる。\n",
     "required": [
       "url",
-      "token",
-      "discordWebhookUrl",
+      "tokenSet",
+      "discordWebhookUrlSet",
       "onSchedule",
       "onStart",
       "onEnd",
@@ -274,14 +347,13 @@ export const internalSchemas = {
         "description": "通知先 ntfy のトピックまで含む URL。空文字は ntfy への通知を無効にすることを表す。",
         "example": "https://ntfy.sh/mirakc-rec"
       },
-      "token": {
-        "type": "string",
-        "description": "ntfy のアクセストークン。空文字は未設定を表す。Authorization ヘッダの Bearer として送信する。"
+      "tokenSet": {
+        "type": "boolean",
+        "description": "ntfy のアクセストークンが設定済みか。トークン自体は応答に含まない。"
       },
-      "discordWebhookUrl": {
-        "type": "string",
-        "description": "通知先 Discord の Incoming Webhook URL。空文字は Discord への通知を無効にすることを表す。",
-        "example": "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz"
+      "discordWebhookUrlSet": {
+        "type": "boolean",
+        "description": "Discord の Incoming Webhook URL が設定済みか。URL 自体は応答に含まない。"
       },
       "onSchedule": {
         "type": "boolean",
@@ -305,6 +377,20 @@ export const internalSchemas = {
       }
     }
   },
+  "NotificationTestDiscordRequest": {
+    "type": "object",
+    "description": "Discord へのテスト通知の送信先。\n\n保存前の入力値 (webhookUrl) をそのまま受け取り、実際に Discord の Webhook へ送信する。\n",
+    "required": [
+      "webhookUrl"
+    ],
+    "properties": {
+      "webhookUrl": {
+        "type": "string",
+        "description": "通知先 Discord の Incoming Webhook URL。",
+        "example": "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz"
+      }
+    }
+  },
   "NotificationTestNtfyRequest": {
     "type": "object",
     "description": "ntfy へのテスト通知の送信先。\n\n保存前の入力値 (url/token) をそのまま受け取り、実際に ntfy へ送信する。\n",
@@ -321,20 +407,6 @@ export const internalSchemas = {
       "token": {
         "type": "string",
         "description": "ntfy のアクセストークン。空文字は未設定を表す。Authorization ヘッダの Bearer として送信する。"
-      }
-    }
-  },
-  "NotificationTestDiscordRequest": {
-    "type": "object",
-    "description": "Discord へのテスト通知の送信先。\n\n保存前の入力値 (webhookUrl) をそのまま受け取り、実際に Discord の Webhook へ送信する。\n",
-    "required": [
-      "webhookUrl"
-    ],
-    "properties": {
-      "webhookUrl": {
-        "type": "string",
-        "description": "通知先 Discord の Incoming Webhook URL。",
-        "example": "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz"
       }
     }
   },

@@ -6,10 +6,11 @@ import {
   sendTestNtfy,
 } from "./notification-settings.ts";
 
-const settings = {
+// GET の応答 (§6.2: シークレットは値を返さず設定済みフラグのみ)。
+const stored = {
   url: "https://ntfy.sh/mirakc-rec",
-  token: "tk",
-  discordWebhookUrl: "",
+  tokenSet: true,
+  discordWebhookUrlSet: false,
   onSchedule: true,
   onStart: true,
   onEnd: false,
@@ -21,23 +22,70 @@ describe("notification-settings api client", () => {
   it("fetchNotificationSettings: GET の JSON を返す", async () => {
     const fetchFn = ((requestUrl: RequestInfo | URL) => {
       expect(String(requestUrl)).toBe("/api/notification-settings");
-      return Promise.resolve(Response.json(settings));
+      return Promise.resolve(Response.json(stored));
     }) as typeof fetch;
 
-    expect(await fetchNotificationSettings(fetchFn)).toEqual(settings);
+    expect(await fetchNotificationSettings(fetchFn)).toEqual(stored);
   });
 
   it("saveNotificationSettings: PUT して保存結果を返す", async () => {
+    const input = {
+      url: stored.url,
+      token: "tk_new",
+      onSchedule: true,
+      onStart: true,
+      onEnd: false,
+      onFail: true,
+      onRemove: false,
+    };
     const fetchFn = ((requestUrl: RequestInfo | URL, init?: RequestInit) => {
       expect(String(requestUrl)).toBe("/api/notification-settings");
       expect(init?.method).toBe("PUT");
-      expect(JSON.parse(String(init?.body))).toEqual(settings);
-      return Promise.resolve(Response.json(settings));
+      expect(JSON.parse(String(init?.body))).toEqual(input);
+      return Promise.resolve(Response.json(stored));
     }) as typeof fetch;
 
-    expect(await saveNotificationSettings(settings, fetchFn)).toEqual(
-      settings,
-    );
+    expect(await saveNotificationSettings(input, fetchFn)).toEqual(stored);
+  });
+
+  it("saveNotificationSettings: シークレット未入力なら body から省略される", async () => {
+    // シークレット無しの body はそのまま送られる (サーバーは保存済み値を保持)。
+    const input = {
+      url: stored.url,
+      onSchedule: true,
+      onStart: true,
+      onEnd: false,
+      onFail: true,
+      onRemove: false,
+    };
+    const fetchFn = ((_requestUrl: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body).toEqual(input);
+      expect("token" in body).toBe(false);
+      expect("discordWebhookUrl" in body).toBe(false);
+      return Promise.resolve(Response.json(stored));
+    }) as typeof fetch;
+
+    expect(await saveNotificationSettings(input, fetchFn)).toEqual(stored);
+  });
+
+  it("saveNotificationSettings: クリア (null) もそのまま送る", async () => {
+    const input = {
+      url: "",
+      token: null,
+      onSchedule: false,
+      onStart: false,
+      onEnd: false,
+      onFail: false,
+      onRemove: false,
+    };
+    const fetchFn = ((requestUrl: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(requestUrl)).toBe("/api/notification-settings");
+      expect(JSON.parse(String(init?.body))).toEqual(input);
+      return Promise.resolve(Response.json(stored));
+    }) as typeof fetch;
+
+    expect(await saveNotificationSettings(input, fetchFn)).toEqual(stored);
   });
 
   it("sendTestNtfy: POST /test/ntfy に url/token を送る", async () => {
@@ -45,13 +93,13 @@ describe("notification-settings api client", () => {
       expect(String(requestUrl)).toBe("/api/notification-settings/test/ntfy");
       expect(init?.method).toBe("POST");
       expect(JSON.parse(String(init?.body))).toEqual({
-        url: settings.url,
-        token: settings.token,
+        url: stored.url,
+        token: "tk_draft",
       });
       return Promise.resolve(Response.json({ ok: true }));
     }) as typeof fetch;
 
-    await sendTestNtfy({ url: settings.url, token: settings.token }, fetchFn);
+    await sendTestNtfy({ url: stored.url, token: "tk_draft" }, fetchFn);
   });
 
   it("sendTestDiscord: POST /test/discord に webhookUrl を送る", async () => {
@@ -73,8 +121,16 @@ describe("notification-settings api client", () => {
         Promise.resolve(new Response("ng", { status: 502 }))) as typeof fetch;
 
     await expect(fetchNotificationSettings(fetchFn)).rejects.toThrow();
-    await expect(saveNotificationSettings(settings, fetchFn)).rejects
-      .toThrow();
+    await expect(
+      saveNotificationSettings({
+        url: "https://ntfy.sh/mirakc-rec",
+        onSchedule: false,
+        onStart: false,
+        onEnd: false,
+        onFail: false,
+        onRemove: false,
+      }, fetchFn),
+    ).rejects.toThrow();
     await expect(
       sendTestNtfy({ url: "x", token: "" }, fetchFn),
     ).rejects.toThrow();

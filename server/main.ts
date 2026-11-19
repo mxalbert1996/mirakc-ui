@@ -7,6 +7,7 @@ import { createProgramsRoutes } from "./routes/programs.ts";
 import { createNotificationSettingsRoutes } from "./routes/notification-settings.ts";
 import { createLiveCommentSettingsRoutes } from "./routes/live-comment-settings.ts";
 import { createCommentsRoutes } from "./routes/comments.ts";
+import { createAuth } from "./lib/auth.ts";
 import { createNicoliveSource } from "./lib/comments/sources/nicolive.ts";
 import { createNxJikkyoSource } from "./lib/comments/sources/nx-jikkyo.ts";
 import type { CommentTarget } from "./lib/comments/types.ts";
@@ -95,6 +96,15 @@ async function notifyIfEnabled(
   const results = await Promise.all(sends);
   return results.some((ok) => ok);
 }
+
+// --- 認証 ---
+// AUTH_TOKEN 設定時のみ有効なオプトイン認証 (server/lib/auth.ts)。全ルートの
+// 先頭 (/api・ストリーム・静的配信・SPA フォールバックのいずれより前) に置く。
+// EventSource・mpegts.js はヘッダを付けられないため、専用のワンタイムチケット
+// (POST /api/auth/ticket) をストリーム系 GET の ?ticket= で受け付ける。
+const auth = createAuth();
+app.use("/*", auth.middleware);
+app.route("/api/auth", auth.routes);
 
 // --- API ---
 // mirakc バックエンドへのプロキシ。予約の登録・削除 (UI からの手動操作) を

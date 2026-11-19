@@ -24,6 +24,12 @@ export default {
     hideToken: "トークンを隠す",
     test: "ntfy にテスト送信",
     optional: "任意",
+    tokenConfigured: "設定済み",
+    tokenConfiguredPlaceholder:
+      "保存済みです。入力すると置き換わり、空欄のままなら保持されます",
+    tokenClearPending: "削除予定",
+    clear: "クリア",
+    clearCancel: "取り消す",
   },
   discord: {
     title: "Discord",
@@ -35,6 +41,12 @@ export default {
     urlInvalid: "Discord の Webhook URL を入力してください",
     urlRequired:
       "通知を送信するには ntfy か Discord のいずれかの URL が必要です",
+    urlConfigured: "設定済み",
+    urlConfiguredPlaceholder:
+      "保存済みです。入力すると置き換わり、空欄のままなら保持されます",
+    urlClearPending: "削除予定",
+    clear: "クリア",
+    clearCancel: "取り消す",
     test: "Discord にテスト送信",
   },
   events: {

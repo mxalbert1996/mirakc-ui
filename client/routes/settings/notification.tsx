@@ -1,10 +1,10 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { DEFAULT_NOTIFICATION_SETTINGS } from "../../../server/lib/notification-settings.ts";
 import {
+  DEFAULT_NOTIFICATION_SETTINGS,
   fetchNotificationSettings,
-  type NotificationSettings,
+  type NotificationSettingsInput,
   saveNotificationSettings,
   sendTestDiscord,
   sendTestNtfy,
@@ -36,7 +36,7 @@ function NotificationSettingsPage() {
   });
 
   const save = useMutation({
-    mutationFn: (input: NotificationSettings) =>
+    mutationFn: (input: NotificationSettingsInput) =>
       saveNotificationSettings(input),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ["notification-settings"] }),

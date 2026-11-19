@@ -85,6 +85,34 @@ with constant QP instead of a target bitrate (see
 hardware encoders that lack constant QP fail their probe and the stream falls
 back to libx264.
 
+### Authentication (optional)
+
+By default mirakc-ui serves everything without authentication, for deployments
+behind a reverse proxy or on a trusted LAN. To have mirakc-ui itself require a
+login, set `AUTH_TOKEN` to a long random ASCII string in the `environment:`
+block:
+
+```yml
+MIRAKC_URL: http://mirakc:40772
+AUTH_TOKEN: paste-a-random-token
+```
+
+Generate one with e.g. `openssl rand -base64 24`. With it set:
+
+- The browser shows a native login prompt when you first open the UI (any
+  user name works; the token is the password). API clients can use
+  `Authorization: Bearer <token>` or `X-Auth-Token: <token>` instead.
+- Live viewing and the live-comment panel fetch short-lived one-time tickets
+  automatically — EventSource and mpegts.js cannot send headers, so nothing
+  needs configuring client-side.
+- Use an ASCII token: non-ASCII characters work with `Bearer`/`X-Auth-Token`
+  but cannot be entered in the Basic-auth password field.
+
+A blank or whitespace-only `AUTH_TOKEN` (e.g. an empty compose interpolation)
+leaves authentication **disabled**; the server logs a warning at startup when
+it sees one. If mirakc-ui is reachable from an untrusted network, set
+`AUTH_TOKEN` or front it with an authenticating reverse proxy.
+
 After launching, open <http://localhost:8888/>. It opens the program guide; from
 there you can search programs, schedule recordings, and start live viewing.
 

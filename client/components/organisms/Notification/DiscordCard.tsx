@@ -3,8 +3,14 @@ import { t } from "../../../locales/i18n.ts";
 import styles from "./DiscordCard.module.css";
 
 type Props = {
-  /** Discord の Incoming Webhook URL。 */
+  /** Discord の Incoming Webhook URL (入力中の draft。保存済み値はクライアントに返らない)。 */
   webhookUrl: string;
+
+  /** Webhook URL が保存済みか。true なら「設定済み」バッジを出す。 */
+  webhookUrlSet: boolean;
+
+  /** Webhook URL を保存時に削除する予定か。true ならバッジが「削除予定」になる。 */
+  webhookUrlClearPending: boolean;
 
   /** URL のエラー種別。undefined ならヒントを表示する。 */
   urlError?: "invalid" | "required";
@@ -16,6 +22,9 @@ type Props = {
   testing: boolean;
 
   onChangeWebhookUrl: (url: string) => void;
+
+  /** クリア予定の切替。ON で draft を空にして null 送信、再クリックで復元。 */
+  onToggleWebhookClear: () => void;
   onTest: () => void;
 };
 
@@ -41,14 +50,41 @@ export default function DiscordCard(props: Props) {
             <span className={styles.fieldLabel}>
               {t("notification.discord.url")}
             </span>
+            {props.webhookUrlSet && (
+              <span
+                className={props.webhookUrlClearPending
+                  ? styles.setTagPending
+                  : styles.setTag}
+              >
+                <Icon size={12}>
+                  {props.webhookUrlClearPending ? "delete" : "check_circle"}
+                </Icon>
+                {props.webhookUrlClearPending
+                  ? t("notification.discord.urlClearPending")
+                  : t("notification.discord.urlConfigured")}
+              </span>
+            )}
+            {props.webhookUrlSet && props.webhookUrl === "" && (
+              <button
+                type="button"
+                className={styles.clearButton}
+                onClick={props.onToggleWebhookClear}
+              >
+                {props.webhookUrlClearPending
+                  ? t("notification.discord.clearCancel")
+                  : t("notification.discord.clear")}
+              </button>
+            )}
           </div>
           <input
-            type="text"
+            type="password"
             className={`${styles.input} ${
               props.urlError !== undefined ? styles.inputBad : ""
             }`}
             value={props.webhookUrl}
-            placeholder={t("notification.discord.urlPlaceholder")}
+            placeholder={props.webhookUrlSet
+              ? t("notification.discord.urlConfiguredPlaceholder")
+              : t("notification.discord.urlPlaceholder")}
             spellCheck={false}
             autoComplete="off"
             onChange={(event) => props.onChangeWebhookUrl(event.target.value)}

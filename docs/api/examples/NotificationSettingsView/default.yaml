@@ -1,0 +1,8 @@
+url: https://ntfy.sh/mirakc-rec
+tokenSet: false
+discordWebhookUrlSet: true
+onSchedule: true
+onStart: false
+onEnd: true
+onFail: true
+onRemove: false

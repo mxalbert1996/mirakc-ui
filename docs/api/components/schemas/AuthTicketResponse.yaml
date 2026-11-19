@@ -1,0 +1,13 @@
+type: object
+additionalProperties: false
+description:
+  $ref: "./descriptions/AuthTicketResponse.md"
+required:
+  - ticket
+properties:
+  ticket:
+    type:
+      - string
+      - "null"
+    description: 発行したワンタイムチケット。AUTH_TOKEN が未設定 (認証無効) の場合は null になる。
+    example: kZ8vF2q0T4mN6xY3wU9sB1aC

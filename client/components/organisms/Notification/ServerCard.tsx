@@ -7,8 +7,14 @@ type Props = {
   /** ntfy の URL (トピック込み)。 */
   url: string;
 
-  /** アクセストークン。 */
+  /** アクセストークン (入力中の draft。保存済み値はクライアントに返らない)。 */
   token: string;
+
+  /** トークンが保存済みか。true なら「設定済み」バッジを出す。 */
+  tokenSet: boolean;
+
+  /** トークンを保存時に削除する予定か。true ならバッジが「削除予定」になる。 */
+  tokenClearPending: boolean;
 
   /** URL のエラー種別。undefined ならヒントを表示する。 */
   urlError?: "invalid" | "required";
@@ -21,6 +27,9 @@ type Props = {
 
   onChangeUrl: (url: string) => void;
   onChangeToken: (token: string) => void;
+
+  /** クリア予定の切替。ON で draft を空にして null 送信、再クリックで復元。 */
+  onToggleTokenClear: () => void;
   onTest: () => void;
 };
 
@@ -88,13 +97,40 @@ export default function ServerCard(props: Props) {
             <span className={styles.optTag}>
               {t("notification.server.optional")}
             </span>
+            {props.tokenSet && (
+              <span
+                className={props.tokenClearPending
+                  ? styles.setTagPending
+                  : styles.setTag}
+              >
+                <Icon size={12}>
+                  {props.tokenClearPending ? "delete" : "check_circle"}
+                </Icon>
+                {props.tokenClearPending
+                  ? t("notification.server.tokenClearPending")
+                  : t("notification.server.tokenConfigured")}
+              </span>
+            )}
+            {props.tokenSet && props.token === "" && (
+              <button
+                type="button"
+                className={styles.clearButton}
+                onClick={props.onToggleTokenClear}
+              >
+                {props.tokenClearPending
+                  ? t("notification.server.clearCancel")
+                  : t("notification.server.clear")}
+              </button>
+            )}
           </div>
           <div className={styles.tokenWrap}>
             <input
               type={showToken ? "text" : "password"}
               className={`${styles.input} ${styles.tokenInput}`}
               value={props.token}
-              placeholder={t("notification.server.tokenPlaceholder")}
+              placeholder={props.tokenSet
+                ? t("notification.server.tokenConfiguredPlaceholder")
+                : t("notification.server.tokenPlaceholder")}
               spellCheck={false}
               autoComplete="off"
               onChange={(event) => props.onChangeToken(event.target.value)}

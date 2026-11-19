@@ -1,0 +1,31 @@
+post:
+  operationId: postAuthTicket
+  summary: ストリーム視聴用ワンタイムチケットの発行。
+  tags:
+    - auth
+  description:
+    $ref: ./descriptions/postAuthTicket.md
+  responses:
+    200:
+      description: 処理成功時。AUTH_TOKEN が未設定 (認証無効) の場合は ticket が null になる。
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/AuthTicketResponse.yaml
+          examples:
+            succeeded:
+              value:
+                $ref: ../examples/AuthTicketResponse/default.yaml
+            disabled:
+              value:
+                ticket: null
+    401:
+      description: 認証が有効な場合に、ヘッダによる認証情報が不正なとき。
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ResponseError.yaml
+          examples:
+            unauthorized:
+              value:
+                $ref: ../examples/ResponseError/Unauthorized.yaml

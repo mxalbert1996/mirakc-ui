@@ -48,6 +48,12 @@ get:
         type: string
         enum:
           - "1"
+    - in: query
+      name: ticket
+      required: false
+      description: AUTH_TOKEN による認証が有効なときのワンタイムチケット。mpegts.js はヘッダを設定できないため、POST /api/auth/ticket で発行したチケットをここで渡す。
+      schema:
+        type: string
   responses:
     200:
       description: トランスコード済みの MPEG-TS ストリーム (チャンク応答)。

@@ -2,8 +2,10 @@ import { Hono } from "hono";
 import {
   isValidDiscordWebhookUrl,
   isValidNtfyUrl,
+  mergeNotificationSettings,
   type NotificationSettings,
   parseNotificationSettingsInput,
+  toNotificationSettingsView,
 } from "../lib/notification-settings.ts";
 
 /**
@@ -30,9 +32,13 @@ export type NotificationTestSender = {
 /**
  * 通知設定の API。`/api/notification-settings` にマウントする。
  *
- * - GET  /              設定 (未保存なら既定値)。token も平文で返す — フォームの
- *                       初期値に必要なため。LAN 内の個人用アプリ前提で許容する
- * - PUT  /              設定の全上書き保存
+ * - GET  /              設定のマスク済み View (未保存なら既定値)。token と
+ *                       discordWebhookUrl は書き込み専用のため、値のかわりに
+ *                       tokenSet / discordWebhookUrlSet だけを返す
+ * - PUT  /              設定の保存。url とトグルは上書きし、シークレットは
+ *                       未指定・空文字なら現行値を保持・非空なら置き換え・
+ *                       明示的な null なら空にする (現行値とのマージはこの
+ *                       ルートが store へアクセスできる立場で行う)
  * - POST /test/ntfy     ntfy へのテスト送信。body は保存前の draft (url / token)。
  *                       失敗は 502
  * - POST /test/discord  Discord へのテスト送信。body は保存前の draft (webhookUrl)。
@@ -45,7 +51,7 @@ export function createNotificationSettingsRoutes(
   const app = new Hono();
 
   app.get("/", async (c) => {
-    return c.json(await store.get());
+    return c.json(toNotificationSettingsView(await store.get()));
   });
 
   app.put("/", async (c) => {
@@ -58,7 +64,13 @@ export function createNotificationSettingsRoutes(
     if (!parsed.ok) {
       return c.json({ error: parsed.error }, 400);
     }
-    return c.json(await store.set(parsed.input));
+    // シークレットは書き込み専用 (未指定・空文字は保持) のため、保存値を
+    // マージしてから書き戻す。
+    const merged = mergeNotificationSettings(await store.get(), parsed.input);
+    if (!merged.ok) {
+      return c.json({ error: merged.error }, 400);
+    }
+    return c.json(toNotificationSettingsView(await store.set(merged.settings)));
   });
 
   app.post("/test/ntfy", async (c) => {

@@ -64,6 +64,43 @@
   letter-spacing: 0.1rem;
 }
 
+.setTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-ok);
+  line-height: 1.6rem;
+}
+
+.setTagPending {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-now);
+  line-height: 1.6rem;
+}
+
+.clearButton {
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text-faint);
+  line-height: 1.6rem;
+  cursor: pointer;
+  transition: color 0.12s;
+
+  &:hover {
+    color: var(--color-now);
+  }
+}
+
 .input {
   width: 100%;
   padding: 1.2rem;

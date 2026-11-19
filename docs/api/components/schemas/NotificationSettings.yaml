@@ -4,37 +4,39 @@ description:
   $ref: "./descriptions/NotificationSettings.md"
 required:
   - url
-  - token
-  - discordWebhookUrl
-  - onSchedule
-  - onStart
-  - onEnd
-  - onFail
-  - onRemove
 properties:
   url:
     type: string
     description: 通知先 ntfy のトピックまで含む URL。空文字は ntfy への通知を無効にすることを表す。
     example: https://ntfy.sh/mirakc-rec
   token:
-    type: string
-    description: ntfy のアクセストークン。空文字は未設定を表す。Authorization ヘッダの Bearer として送信する。
+    type:
+      - string
+      - "null"
+    description: ntfy のアクセストークン。Authorization ヘッダの Bearer として送信する。書き込み専用で、未指定または空文字は保存済みの値を保持し、非空文字は置き換え、明示的な null は空にする。
   discordWebhookUrl:
-    type: string
-    description: 通知先 Discord の Incoming Webhook URL。空文字は Discord への通知を無効にすることを表す。
+    type:
+      - string
+      - "null"
+    description: 通知先 Discord の Incoming Webhook URL。書き込み専用で、未指定または空文字は保存済みの値を保持し、非空文字は置き換え、明示的な null は空にする。
     example: https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz
   onSchedule:
     type: boolean
-    description: 録画予約の登録 (キーワード自動録画と手動) を通知するか。
+    default: false
+    description: 録画予約の登録 (キーワード自動録画と手動) を通知するか。未指定は無効。
   onStart:
     type: boolean
-    description: 録画開始を通知するか。
+    default: false
+    description: 録画開始を通知するか。未指定は無効。
   onEnd:
     type: boolean
-    description: 録画終了を通知するか。
+    default: false
+    description: 録画終了を通知するか。未指定は無効。
   onFail:
     type: boolean
-    description: 録画失敗を通知するか。
+    default: false
+    description: 録画失敗を通知するか。未指定は無効。
   onRemove:
     type: boolean
-    description: 録画予約の削除を通知するか。
+    default: false
+    description: 録画予約の削除を通知するか。未指定は無効。

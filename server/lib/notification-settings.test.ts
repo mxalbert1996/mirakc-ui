@@ -4,10 +4,12 @@ import {
   hasEnabledDestination,
   isValidDiscordWebhookUrl,
   isValidNtfyUrl,
+  mergeNotificationSettings,
   normalizeNotificationSettings,
   type NotificationSettings,
   parseNotificationSettingsInput,
   splitNtfyUrl,
+  toNotificationSettingsView,
 } from "./notification-settings.ts";
 
 Deno.test("isValidNtfyUrl: http(s) + 非空トピックのみ true", () => {
@@ -119,7 +121,7 @@ Deno.test("parse: 正常系は trim と既定値 (未指定トグル false) を�
     input: {
       url: "https://ntfy.sh/mirakc-rec",
       token: "tk_abc",
-      discordWebhookUrl: "",
+      discordWebhookUrl: undefined,
       onSchedule: false,
       onStart: true,
       onEnd: false,
@@ -129,50 +131,40 @@ Deno.test("parse: 正常系は trim と既定値 (未指定トグル false) を�
   });
 });
 
-Deno.test("parse: 全イベント OFF なら url 空でも保存できる", () => {
-  const result = parseNotificationSettingsInput({
-    url: "",
-    token: "",
-    onSchedule: false,
-    onStart: false,
-    onEnd: false,
-    onFail: false,
-    onRemove: false,
-  });
-  assertEquals(result.ok, true);
-});
+Deno.test("parse: シークレットは未指定・空文字を保持、null を空にする合図にする", () => {
+  const draftOf = (value: unknown) => {
+    const result = parseNotificationSettingsInput(value);
+    if (!result.ok) {
+      throw new Error(`parse failed: ${result.error}`);
+    }
+    return result.input;
+  };
 
-Deno.test("parse: いずれかのイベントが有効なら url 必須", () => {
-  for (
-    const key of ["onSchedule", "onStart", "onEnd", "onFail", "onRemove"]
-  ) {
-    const result = parseNotificationSettingsInput({
-      url: "",
-      token: "",
-      [key]: true,
-    });
-    assertEquals(result.ok, false, key);
-  }
-});
-
-Deno.test("parse: url が非空なら OFF でも形式を検証する", () => {
-  const result = parseNotificationSettingsInput({
-    url: "not a url",
-    token: "",
-    onStart: false,
-    onEnd: false,
-  });
-  assertEquals(result.ok, false);
+  // 未指定。
+  assertEquals(draftOf({ url: "" }).token, undefined);
+  // 空文字・空白のみも保持。
+  assertEquals(draftOf({ url: "", token: "  " }).token, undefined);
+  assertEquals(
+    draftOf({ url: "", discordWebhookUrl: "" }).discordWebhookUrl,
+    undefined,
+  );
+  // 明示的な null は空にする合図。
+  assertEquals(draftOf({ url: "", token: null }).token, null);
+  assertEquals(
+    draftOf({ url: "", discordWebhookUrl: null }).discordWebhookUrl,
+    null,
+  );
 });
 
 Deno.test("parse: 不正な型は ok:false", () => {
   const invalid: unknown[] = [
     null,
     {},
-    { url: 1, token: "" },
+    { url: 1 },
     { url: "", token: 1 },
     { url: "", token: "", onStart: "yes" },
     { url: "", token: "", onFail: 1 },
+    { url: "", discordWebhookUrl: 1 },
   ];
   for (const value of invalid) {
     assertEquals(
@@ -187,6 +179,40 @@ Deno.test("parse: 不正な型は ok:false", () => {
     false,
   );
   assertEquals(DEFAULT_NOTIFICATION_SETTINGS.discordWebhookUrl, "");
+});
+
+Deno.test("parse: url が非空なら OFF でも形式を検証する", () => {
+  const result = parseNotificationSettingsInput({
+    url: "not a url",
+    token: "",
+    onStart: false,
+    onEnd: false,
+  });
+  assertEquals(result.ok, false);
+});
+
+Deno.test("parse: discordWebhookUrl が非空なら形式を検証する", () => {
+  const result = parseNotificationSettingsInput({
+    url: "",
+    token: "",
+    discordWebhookUrl: "https://example.com/not-a-webhook",
+    onStart: false,
+  });
+  assertEquals(result.ok, false);
+});
+
+Deno.test("parse: Discord Webhook だけでも (ntfy 空でも) 通る", () => {
+  const result = parseNotificationSettingsInput({
+    url: "",
+    token: "",
+    discordWebhookUrl: " https://discord.com/api/webhooks/123/abc ",
+    onStart: true,
+  });
+  assertEquals(result.ok, true);
+  assertEquals(
+    result.ok && result.input.discordWebhookUrl,
+    "https://discord.com/api/webhooks/123/abc",
+  );
 });
 
 Deno.test("isValidDiscordWebhookUrl: discord(app).com の webhook 形式のみ true", () => {
@@ -233,46 +259,170 @@ Deno.test("isValidDiscordWebhookUrl: discord(app).com の webhook 形式のみ t
   );
 });
 
-Deno.test("parse: Discord Webhook だけでも (ntfy 空でも) 保存できる", () => {
-  const result = parseNotificationSettingsInput({
+Deno.test("merge: 全イベント OFF なら url 空でも保存できる", () => {
+  const draft = parseNotificationSettingsInput({
     url: "",
     token: "",
-    discordWebhookUrl: " https://discord.com/api/webhooks/123/abc ",
-    onStart: true,
+    onSchedule: false,
+    onStart: false,
+    onEnd: false,
+    onFail: false,
+    onRemove: false,
   });
-  assertEquals(result, {
-    ok: true,
-    input: {
-      url: "",
+  assertEquals(draft.ok, true);
+  if (!draft.ok) {
+    return;
+  }
+  assertEquals(
+    mergeNotificationSettings(DEFAULT_NOTIFICATION_SETTINGS, draft.input),
+    { ok: true, settings: DEFAULT_NOTIFICATION_SETTINGS },
+  );
+});
+
+Deno.test("merge: いずれかのイベントが有効なら通知先が 1 つ必須", () => {
+  for (
+    const key of ["onSchedule", "onStart", "onEnd", "onFail", "onRemove"]
+  ) {
+    const draft = parseNotificationSettingsInput({ url: "", [key]: true });
+    assertEquals(draft.ok, true, key);
+    if (!draft.ok) {
+      continue;
+    }
+    assertEquals(
+      mergeNotificationSettings(DEFAULT_NOTIFICATION_SETTINGS, draft.input).ok,
+      false,
+      key,
+    );
+  }
+});
+
+Deno.test("merge: 保持した Discord Webhook があればイベント有効でも通る", () => {
+  const current: NotificationSettings = {
+    ...DEFAULT_NOTIFICATION_SETTINGS,
+    discordWebhookUrl: "https://discord.com/api/webhooks/123/abc",
+  };
+  // シークレットを未指定 (保持) でイベントを有効にする保存。
+  const draft = parseNotificationSettingsInput({ url: "", onStart: true });
+  assertEquals(draft.ok, true);
+  if (!draft.ok) {
+    return;
+  }
+  const merged = mergeNotificationSettings(current, draft.input);
+  assertEquals(merged.ok, true);
+  assertEquals(
+    merged.ok && merged.settings.discordWebhookUrl,
+    current.discordWebhookUrl,
+  );
+});
+
+Deno.test("merge: シークレットは未指定なら保持・非空なら置き換え・null なら空にする", () => {
+  const current: NotificationSettings = {
+    ...DEFAULT_NOTIFICATION_SETTINGS,
+    url: "https://ntfy.sh/x",
+    token: "tk_old",
+    discordWebhookUrl: "https://discord.com/api/webhooks/123/abc",
+  };
+
+  // 未指定 (と空文字) は保持。
+  for (
+    const body of [{ url: current.url }, {
+      url: current.url,
       token: "",
-      discordWebhookUrl: "https://discord.com/api/webhooks/123/abc",
-      onSchedule: false,
-      onStart: true,
-      onEnd: false,
-      onFail: false,
-      onRemove: false,
+      discordWebhookUrl: "",
+    }]
+  ) {
+    const draft = parseNotificationSettingsInput(body);
+    assertEquals(draft.ok, true, JSON.stringify(body));
+    if (!draft.ok) {
+      continue;
+    }
+    const merged = mergeNotificationSettings(current, draft.input);
+    assertEquals(merged.ok, true, JSON.stringify(body));
+    assertEquals(
+      merged.ok && merged.settings.token,
+      "tk_old",
+      JSON.stringify(body),
+    );
+    assertEquals(
+      merged.ok && merged.settings.discordWebhookUrl,
+      "https://discord.com/api/webhooks/123/abc",
+      JSON.stringify(body),
+    );
+  }
+
+  // 非空は置き換え。
+  const replaced = mergeNotificationSettings(current, {
+    url: current.url,
+    token: "tk_new",
+    discordWebhookUrl: "https://discord.com/api/webhooks/456/def",
+    onSchedule: false,
+    onStart: false,
+    onEnd: false,
+    onFail: false,
+    onRemove: false,
+  });
+  assertEquals(replaced, {
+    ok: true,
+    settings: {
+      ...current,
+      token: "tk_new",
+      discordWebhookUrl: "https://discord.com/api/webhooks/456/def",
+    },
+  });
+
+  // 明示的な null は空にする。
+  const cleared = mergeNotificationSettings(current, {
+    url: current.url,
+    token: null,
+    discordWebhookUrl: null,
+    onSchedule: false,
+    onStart: false,
+    onEnd: false,
+    onFail: false,
+    onRemove: false,
+  });
+  assertEquals(cleared, {
+    ok: true,
+    settings: {
+      ...current,
+      token: "",
+      discordWebhookUrl: "",
     },
   });
 });
 
-Deno.test("parse: イベント有効で通知先がゼロ (ntfy も Discord も空) ならエラー", () => {
-  const result = parseNotificationSettingsInput({
+Deno.test("toNotificationSettingsView: シークレットを出さず設定済みかどうかだけを返す", () => {
+  const unset = toNotificationSettingsView(DEFAULT_NOTIFICATION_SETTINGS);
+  assertEquals(unset, {
     url: "",
-    token: "",
-    discordWebhookUrl: "",
-    onFail: true,
-  });
-  assertEquals(result.ok, false);
-});
-
-Deno.test("parse: discordWebhookUrl が非空なら形式を検証する", () => {
-  const result = parseNotificationSettingsInput({
-    url: "",
-    token: "",
-    discordWebhookUrl: "https://example.com/not-a-webhook",
+    tokenSet: false,
+    discordWebhookUrlSet: false,
+    onSchedule: false,
     onStart: false,
+    onEnd: false,
+    onFail: false,
+    onRemove: false,
   });
-  assertEquals(result.ok, false);
+  // 平文のシークレットが応答に混ざらないこと。
+  assertEquals("token" in unset, false);
+  assertEquals("discordWebhookUrl" in unset, false);
+
+  const set = toNotificationSettingsView({
+    ...DEFAULT_NOTIFICATION_SETTINGS,
+    url: "https://ntfy.sh/x",
+    token: "tk",
+    discordWebhookUrl: "https://discord.com/api/webhooks/123/abc",
+  });
+  assertEquals(set, {
+    url: "https://ntfy.sh/x",
+    tokenSet: true,
+    discordWebhookUrlSet: true,
+    onSchedule: false,
+    onStart: false,
+    onEnd: false,
+    onFail: false,
+    onRemove: false,
+  });
 });
 
 Deno.test("hasEnabledDestination: トグル ON かつ妥当な通知先が 1 つ以上で true", () => {
