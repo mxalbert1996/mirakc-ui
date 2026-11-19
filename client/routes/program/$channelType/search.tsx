@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import type { components } from "../../../lib/api/schema.d.ts";
 import { serviceOfProgram } from "../../../lib/service.ts";
 import { useProgramQueries } from "../../../hooks/use-program-queries.ts";
+import { useSlimPrograms } from "../../../hooks/use-slim-programs.ts";
 import ProgramSearchModal, {
   type FilterId,
 } from "../../../components/organisms/Program/SearchModal.tsx";
@@ -27,7 +28,10 @@ function ProgramSearchModalRoute() {
   const { q, filter, d } = Route.useSearch();
   const navigate = Route.useNavigate();
 
-  const { services, programs, recordingSchedules } = useProgramQueries();
+  const { services, recordingSchedules } = useProgramQueries();
+
+  // 検索は終了済み番組も対象のため、窓を付けない全件の slim 一覧を使う。
+  const programs = useSlimPrograms();
 
   // 閉じる = 番組表 (レイアウト) へ戻る。?q= / ?filter= は落とし ?d= は保つ。
   const handleClose = () => {

@@ -23,11 +23,10 @@ import { t } from "../locales/i18n.ts";
 /** このジョブが登録した予約に付ける識別タグ。 */
 export const KEYWORD_RECORDING_TAG = "mirakc-ui:keyword";
 
-/** マッチングに使う番組情報 (MirakurunProgram のサブセット)。 */
+/** このジョブが使う番組情報 (programs-cache の slim 形式と同一)。 */
 export type ProgramLike = {
   id: number;
   name?: string | null;
-  description?: string | null;
   startAt: number;
   duration: number;
   networkId: number;
@@ -46,8 +45,14 @@ type ServiceLike = {
 };
 
 export type KeywordRecorderDeps = {
-  /** mirakc の Web API のベース URL (mirakcApiUrlOf で構築)。 */
+  /** mirakc の Web API のベース URL (mirakcApiUrlOf で構築)。services・schedules の取得に使う。 */
   mirakcApiUrl: string;
+
+  /**
+   * 番組一覧 (programs-cache の slim 形式)。mirakc からの全量取得は
+   * キャッシュ経由で他機能 (GET /api/programs) と共有する。
+   */
+  getPrograms: () => Promise<ProgramLike[]>;
 
   /** ルール一覧を返す。enabled の絞り込みはジョブ側で行う。 */
   listRules: () => Promise<KeywordRule[]>;
@@ -108,7 +113,7 @@ export async function runKeywordRecording(
   const apiUrl = deps.mirakcApiUrl.replace(/\/$/, "");
 
   const [programs, services, schedules] = await Promise.all([
-    fetchJson<ProgramLike[]>(fetchFn, `${apiUrl}/programs`),
+    deps.getPrograms(),
     fetchJson<ServiceLike[]>(fetchFn, `${apiUrl}/services`),
     fetchJson<ScheduleLike[]>(fetchFn, `${apiUrl}/recording/schedules`),
   ]);

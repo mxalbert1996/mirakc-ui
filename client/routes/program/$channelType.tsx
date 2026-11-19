@@ -8,6 +8,7 @@ import {
   serviceOfProgram,
 } from "../../lib/service.ts";
 import { useProgramQueries } from "../../hooks/use-program-queries.ts";
+import { useSlimPrograms } from "../../hooks/use-slim-programs.ts";
 import { useNow } from "../../hooks/use-now.ts";
 import {
   nowEpochMs,
@@ -66,12 +67,22 @@ function ProgramLayout() {
     document.title = t("program.title");
   }, []);
 
-  const targetMs = d ?? defaultTargetMs();
+  // ?d= の値も含め「時」で切り捨てる — 表示窓 (templates/Program は startOfHour
+  // 基準) と slim 窓の端を揃え、窓の頭の番組が落ちるのを防ぐ。
+  const targetMs = startOfHourEpochMs(d ?? defaultTargetMs());
 
   // 現在時刻ラインを分単位で追従させるため 1 分ごとに進める。
   const currentDate = zonedFromEpochMs(useNow(60_000));
 
-  const { services, programs, recordingSchedules } = useProgramQueries();
+  const { services, recordingSchedules } = useProgramQueries();
+
+  // 表示日 (targetMs) の 24 時間ぶんを slim 一覧で取得する。窓の端は「時」で
+  // 切り捨て済みのため、?d= の更新 (日付移動) 以外でキーは変わらない。
+  // 窓との重複判定はサーバ側と同じ式なので、Table の重複フィルタは二重掛けで無害。
+  const programs = useSlimPrograms({
+    from: targetMs,
+    to: targetMs + 24 * 60 * 60 * 1000,
+  });
 
   // 日付変更は ?d= を更新する。レイアウトのパスへ戻す (モーダルは閉じる)。
   const handleSetTargetDate = (date: Temporal.ZonedDateTime) => {

@@ -10,6 +10,7 @@ import {
 } from "../../lib/api/keyword-rules.ts";
 import { buildChannelGroups } from "../../lib/service.ts";
 import { useNow } from "../../hooks/use-now.ts";
+import { useUpcomingPrograms } from "../../hooks/use-upcoming-programs.ts";
 import { t } from "../../locales/i18n.ts";
 import LoadingTemplate from "../../components/templates/Loading.tsx";
 import KeywordRulesTemplate from "../../components/templates/KeywordRules.tsx";
@@ -42,7 +43,9 @@ function KeywordRulesPage() {
   });
   const services = $api.useQuery("get", "/services");
   const channels = $api.useQuery("get", "/channels");
-  const programs = $api.useQuery("get", "/programs");
+
+  // 「今後 7 日間」の対象は slim 一覧の窓 (use-upcoming-programs) から組み立てる。
+  const programs = useUpcomingPrograms();
 
   // 条件チップは channel 単位で表示する。配下サービスはバッジ用にフル解決する。
   const channelGroups = useMemo(

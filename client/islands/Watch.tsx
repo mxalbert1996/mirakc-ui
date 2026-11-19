@@ -3,6 +3,9 @@ import type { components } from "../lib/api/schema.d.ts";
 import { $api } from "../lib/api/client.ts";
 import { useLiveComments } from "../hooks/use-live-comments.ts";
 import { useNow } from "../hooks/use-now.ts";
+import { useSlimPrograms } from "../hooks/use-slim-programs.ts";
+import { fullProgramOf } from "../lib/api/programs.ts";
+import { nowEpochMs, startOfHourEpochMs } from "../lib/datetime.ts";
 import { type ChannelType, sortServices } from "../lib/service.ts";
 import { shouldRequestHevc } from "../lib/hevc-preference.ts";
 import { t } from "../locales/i18n.ts";
@@ -83,7 +86,17 @@ function findNext(
  */
 export default function Watch(props: Props) {
   const services = $api.useQuery("get", "/services");
-  const programs = $api.useQuery("get", "/programs");
+
+  // slim 一覧は「現在」を含む 24 時間前〜12 時間後の窓で取得する (24 時間の
+  // バック窓で、開始から長時間経った放送中番組も捕捉できる)。窓の端は再 render
+  // のたびにキーが変わらないよう「時」で切り捨てる。useNow の刻みは描画追従用で
+  // 窓には使わない。
+  const anchor = startOfHourEpochMs(nowEpochMs());
+  const programs = useSlimPrograms({
+    from: anchor - 24 * 3600_000,
+    to: anchor + 12 * 3600_000,
+  });
+
   const [channelType, setChannelType] = useState<ChannelType>("GR");
   const [tab, setTab] = useState<TabId>("select");
 
@@ -109,6 +122,17 @@ export default function Watch(props: Props) {
     ? findAiring(allPrograms, selectedService, now)
     : undefined;
 
+  // 放送中番組の audio / audios (プレイヤーの音声トラック) と description /
+  // extended (InfoTab) は slim 一覧に無いため ID 指定で取得する。audios は
+  // 取得中は空配列で落とす。
+  const airingQuery = $api.useQuery(
+    "get",
+    "/programs/{id}",
+    { params: { path: { id: currentProgram?.id ?? 0 } } },
+    { enabled: currentProgram !== undefined },
+  );
+  const airingFull = fullProgramOf(airingQuery.data);
+
   const live = useLiveComments(selectedService?.id);
 
   if (services.isPending) {
@@ -125,8 +149,8 @@ export default function Watch(props: Props) {
     }`
     : undefined;
 
-  const audios = currentProgram?.audios ??
-    (currentProgram?.audio ? [currentProgram.audio] : []);
+  const audios = airingFull?.audios ??
+    (airingFull?.audio ? [airingFull.audio] : []);
 
   const channels: ChannelEntry[] = allServices
     .filter((service) => service.channel.type === channelType)
@@ -154,7 +178,10 @@ export default function Watch(props: Props) {
       captionVisible={props.captionVisible}
       onCaptionToggle={props.onCaptionToggle}
       serviceSelectedAt={props.serviceSelectedAt}
-      program={currentProgram}
+      // InfoTab は description / extended を描くため、slim ではなくフル番組を
+      // 優先して渡す (フル取得中は slim へフォールバック。タイトル・時刻等の
+      // フィールドは slim と同一のため表示は崩れない)。
+      program={airingFull ?? currentProgram}
       service={selectedService}
       channelType={channelType}
       onChangeChannelType={setChannelType}

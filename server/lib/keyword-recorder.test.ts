@@ -2,6 +2,7 @@ import { assertEquals } from "@std/assert";
 import {
   buildContentPath,
   KEYWORD_RECORDING_TAG,
+  type ProgramLike,
   runKeywordRecording,
   startKeywordRecordingJob,
 } from "./keyword-recorder.ts";
@@ -39,7 +40,6 @@ function program(overrides: Record<string, unknown> = {}) {
   return {
     id: 327360102706471,
     name: "ニュースウォッチ",
-    description: "今日の出来事",
     startAt,
     duration: 30 * 60 * 1000,
     networkId: 32736,
@@ -85,9 +85,6 @@ function fakeMirakc(options: {
     }
     calls.push(call);
 
-    if (url.endsWith("/programs") && method === "GET") {
-      return Promise.resolve(Response.json(options.programs));
-    }
     if (url.endsWith("/services") && method === "GET") {
       return Promise.resolve(Response.json(services));
     }
@@ -103,16 +100,20 @@ function fakeMirakc(options: {
     }
     return Promise.resolve(new Response("not found", { status: 404 }));
   }) as typeof fetch;
-  return { calls, fetchFn };
+  // 番組一覧はキャッシュ (programs-cache) 経由になったため fetch を介さない。
+  const getPrograms = () => Promise.resolve(options.programs as ProgramLike[]);
+  return { calls, fetchFn, getPrograms };
 }
 
 function deps(
   rules: KeywordRule[],
   fetchFn: typeof fetch,
+  getPrograms: () => Promise<ProgramLike[]>,
   notifications: { title: string; message: string }[] = [],
 ) {
   return {
     mirakcApiUrl: "http://mirakc:40772/api",
+    getPrograms,
     listRules: () => Promise.resolve(rules),
     notify: (n: { title: string; message: string }) => {
       notifications.push({ title: n.title, message: n.message });
@@ -125,9 +126,9 @@ function deps(
 }
 
 Deno.test("runKeywordRecording: 有効ルールが無ければ何もしない", async () => {
-  const { calls, fetchFn } = fakeMirakc({ programs: [program()] });
+  const { calls, fetchFn, getPrograms } = fakeMirakc({ programs: [program()] });
   const result = await runKeywordRecording(
-    deps([rule({ enabled: false })], fetchFn),
+    deps([rule({ enabled: false })], fetchFn, getPrograms),
   );
   assertEquals(result.registered, []);
   assertEquals(calls, []);
@@ -135,13 +136,13 @@ Deno.test("runKeywordRecording: 有効ルールが無ければ何もしない", 
 
 Deno.test("runKeywordRecording: 一致した将来番組を予約し通知する", async () => {
   const target = program();
-  const { calls, fetchFn } = fakeMirakc({
+  const { calls, fetchFn, getPrograms } = fakeMirakc({
     programs: [target, program({ id: 2, name: "アニメまつり" })],
   });
   const notifications: { title: string; message: string }[] = [];
 
   const result = await runKeywordRecording(
-    deps([rule()], fetchFn, notifications),
+    deps([rule()], fetchFn, getPrograms, notifications),
   );
 
   assertEquals(result.registered, [
@@ -170,16 +171,18 @@ Deno.test("runKeywordRecording: 一致した将来番組を予約し通知する
 
 Deno.test("runKeywordRecording: チャンネル条件は service の channel を解決して判定する", async () => {
   // 番組は networkId 32736 / serviceId 1024 → channel "27"。
-  const { calls, fetchFn } = fakeMirakc({ programs: [program()] });
+  const { calls, fetchFn, getPrograms } = fakeMirakc({ programs: [program()] });
 
   const matched = await runKeywordRecording(
-    deps([rule({ channels: ["27"] })], fetchFn),
+    deps([rule({ channels: ["27"] })], fetchFn, getPrograms),
   );
   assertEquals(matched.registered.length, 1);
 
-  const { fetchFn: fetchFn2 } = fakeMirakc({ programs: [program()] });
+  const { fetchFn: fetchFn2, getPrograms: getPrograms2 } = fakeMirakc({
+    programs: [program()],
+  });
   const unmatched = await runKeywordRecording(
-    deps([rule({ channels: ["25"] })], fetchFn2),
+    deps([rule({ channels: ["25"] })], fetchFn2, getPrograms2),
   );
   assertEquals(unmatched.registered, []);
   assertEquals(calls.filter((c) => c.method === "POST").length, 1);
@@ -193,10 +196,12 @@ Deno.test("runKeywordRecording: チャンネル条件は配下サービスを横
     serviceId: 1025,
     name: "ニュース速報",
   });
-  const { calls, fetchFn } = fakeMirakc({ programs: [onSubService] });
+  const { calls, fetchFn, getPrograms } = fakeMirakc({
+    programs: [onSubService],
+  });
 
   const result = await runKeywordRecording(
-    deps([rule({ channels: ["27"] })], fetchFn),
+    deps([rule({ channels: ["27"] })], fetchFn, getPrograms),
   );
 
   assertEquals(result.registered, [
@@ -206,21 +211,27 @@ Deno.test("runKeywordRecording: チャンネル条件は配下サービスを横
 });
 
 Deno.test("runKeywordRecording: ジャンル・期間の条件も適用される", async () => {
-  const { fetchFn } = fakeMirakc({ programs: [program()] });
+  const { fetchFn, getPrograms } = fakeMirakc({ programs: [program()] });
   const result = await runKeywordRecording(
-    deps([rule({ genres: [7] })], fetchFn),
+    deps([rule({ genres: [7] })], fetchFn, getPrograms),
   );
   assertEquals(result.registered, []);
 
-  const { fetchFn: fetchFn2 } = fakeMirakc({ programs: [program()] });
+  const { fetchFn: fetchFn2, getPrograms: getPrograms2 } = fakeMirakc({
+    programs: [program()],
+  });
   // startAt は Asia/Tokyo で 2026-01-02。当日 (TZ 付き) の範囲に収まる。
   const inPeriod = await runKeywordRecording(
-    deps([
-      rule({
-        from: "2026-01-02T00:00:00+09:00",
-        to: "2026-01-02T23:59:59+09:00",
-      }),
-    ], fetchFn2),
+    deps(
+      [
+        rule({
+          from: "2026-01-02T00:00:00+09:00",
+          to: "2026-01-02T23:59:59+09:00",
+        }),
+      ],
+      fetchFn2,
+      getPrograms2,
+    ),
   );
   assertEquals(inPeriod.registered.length, 1);
 });
@@ -229,22 +240,28 @@ Deno.test("runKeywordRecording: 予約済み・過去の番組はスキップす
   const past = program({ id: 1, startAt: startAt - 86_400_000 });
   const scheduled = program({ id: 2 });
   const fresh = program({ id: 3 });
-  const { calls, fetchFn } = fakeMirakc({
+  const { calls, fetchFn, getPrograms } = fakeMirakc({
     programs: [past, scheduled, fresh],
     schedules: [{ program: { id: 2 }, state: "scheduled", tags: [] }],
   });
 
-  const result = await runKeywordRecording(deps([rule()], fetchFn));
+  const result = await runKeywordRecording(
+    deps([rule()], fetchFn, getPrograms),
+  );
 
   assertEquals(result.registered, [{ programId: 3, keyword: "ニュース" }]);
   assertEquals(calls.filter((c) => c.method === "POST").length, 1);
 });
 
 Deno.test("runKeywordRecording: 複数ルール一致でも 1 番組 1 予約", async () => {
-  const { calls, fetchFn } = fakeMirakc({ programs: [program()] });
+  const { calls, fetchFn, getPrograms } = fakeMirakc({ programs: [program()] });
 
   const result = await runKeywordRecording(
-    deps([rule(), rule({ id: "rule-2", keyword: "ウォッチ" })], fetchFn),
+    deps(
+      [rule(), rule({ id: "rule-2", keyword: "ウォッチ" })],
+      fetchFn,
+      getPrograms,
+    ),
   );
 
   assertEquals(result.registered.length, 1);
@@ -255,6 +272,7 @@ Deno.test("startKeywordRecordingJob: trigger は debounce され 1 回の実行�
   let runs = 0;
   const job = startKeywordRecordingJob({
     mirakcApiUrl: "http://mirakc:40772/api",
+    getPrograms: () => Promise.resolve([]),
     listRules: () => {
       runs++;
       return Promise.resolve([]);
@@ -284,6 +302,7 @@ Deno.test("startKeywordRecordingJob: stop 後は trigger しても実行され�
   let runs = 0;
   const job = startKeywordRecordingJob({
     mirakcApiUrl: "http://mirakc:40772/api",
+    getPrograms: () => Promise.resolve([]),
     listRules: () => {
       runs++;
       return Promise.resolve([]);
@@ -306,6 +325,7 @@ Deno.test("startKeywordRecordingJob: 実行中の trigger は完了後にもう 
   });
   const job = startKeywordRecordingJob({
     mirakcApiUrl: "http://mirakc:40772/api",
+    getPrograms: () => Promise.resolve([]),
     listRules: async () => {
       runs++;
       if (runs === 1) {
@@ -338,11 +358,14 @@ Deno.test("startKeywordRecordingJob: 実行中の trigger は完了後にもう 
 Deno.test("runKeywordRecording: 予約 POST が失敗しても他の番組を続行する", async () => {
   const a = program({ id: 1 });
   const b = program({ id: 2 });
-  const { fetchFn } = fakeMirakc({ programs: [a, b], failPostFor: [1] });
+  const { fetchFn, getPrograms } = fakeMirakc({
+    programs: [a, b],
+    failPostFor: [1],
+  });
   const notifications: { title: string; message: string }[] = [];
 
   const result = await runKeywordRecording(
-    deps([rule()], fetchFn, notifications),
+    deps([rule()], fetchFn, getPrograms, notifications),
   );
 
   assertEquals(result.registered, [{ programId: 2, keyword: "ニュース" }]);

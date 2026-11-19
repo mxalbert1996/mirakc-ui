@@ -10,6 +10,7 @@ import {
 import { buildUpcoming } from "../../../lib/keyword-preview.ts";
 import { buildChannelGroups } from "../../../lib/service.ts";
 import { useNow } from "../../../hooks/use-now.ts";
+import { useUpcomingPrograms } from "../../../hooks/use-upcoming-programs.ts";
 import RuleFormModal from "../../../components/organisms/KeywordRules/RuleFormModal.tsx";
 
 export const Route = createFileRoute("/settings/keywords/$ruleId")({
@@ -29,7 +30,9 @@ function EditKeywordRuleModal() {
   });
   const services = $api.useQuery("get", "/services");
   const channels = $api.useQuery("get", "/channels");
-  const programs = $api.useQuery("get", "/programs");
+
+  // 「今後 7 日間」の対象は slim 一覧の窓 (use-upcoming-programs) から組み立てる。
+  const programs = useUpcomingPrograms();
 
   const channelGroups = useMemo(
     () => buildChannelGroups(channels.data ?? [], services.data ?? []),

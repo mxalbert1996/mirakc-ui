@@ -3,6 +3,7 @@ import { serveStatic } from "hono/deno";
 import { createMirakcProxy } from "./routes/mirakc.ts";
 import { transcode } from "./routes/transcode.ts";
 import { createKeywordRulesRoutes } from "./routes/keyword-rules.ts";
+import { createProgramsRoutes } from "./routes/programs.ts";
 import { createNotificationSettingsRoutes } from "./routes/notification-settings.ts";
 import { createLiveCommentSettingsRoutes } from "./routes/live-comment-settings.ts";
 import { createCommentsRoutes } from "./routes/comments.ts";
@@ -32,6 +33,7 @@ import {
   type KeywordRecordingJob,
   startKeywordRecordingJob,
 } from "./lib/keyword-recorder.ts";
+import { createProgramsCache } from "./lib/programs-cache.ts";
 import { mirakcApiUrlOf, mirakcEventsUrlOf } from "./lib/mirakc.ts";
 import { t } from "./locales/i18n.ts";
 
@@ -46,6 +48,16 @@ const liveCommentSettingsStore = createLiveCommentMappingStore(kv);
 
 const mirakcUrl = Deno.env.get("MIRAKC_URL");
 const apiUrl = mirakcUrl === undefined ? undefined : mirakcApiUrlOf(mirakcUrl);
+
+// mirakc の番組一覧キャッシュ (slim 化 + TTL + 単一フライト)。GET /api/programs
+// とキーワード録画ジョブで共有し、mirakc への全量取得 (~24MB) を 1 回に畳む。
+// MIRAKC_URL 未設定なら null で、API は mirakc プロキシと同じ 500 規約で
+// 応答するためエンドポイント自体は常にマウントする。
+const programsCache = apiUrl === undefined
+  ? null
+  : createProgramsCache({ apiUrl });
+const getPrograms = programsCache?.getPrograms ??
+  (() => Promise.reject(new Error("MIRAKC_URL is not set")));
 
 // 日付表示のタイムゾーン。プロセスの TZ 環境変数を反映する (未設定なら
 // 実行環境の既定で、Docker では UTC)。サーバの録画通知・録画ファイル名の整形が
@@ -121,6 +133,10 @@ app.route(
     },
   }),
 );
+// 番組一覧 API (キャッシュ済みの slim 形式)。from/to (epoch ms) で放送時間の
+// 重複絞り込みを行う。未設定時も 500 JSON で応答する一貫した API 面のため、
+// MIRAKC_URL の有無に関係なくマウントする。
+app.route("/api/programs", createProgramsRoutes({ getPrograms }));
 // ライブ視聴のトランスコード配信 (mirakc → tsreadex → ffmpeg → MPEG-TS)。
 app.route("/api/transcode", transcode);
 // キーワード自動録画ルールの CRUD。ルールの登録・更新でジョブを再実行する
@@ -200,6 +216,8 @@ if (mirakcUrl !== undefined && apiUrl !== undefined) {
     : 60;
   recordingJob = startKeywordRecordingJob({
     mirakcApiUrl: apiUrl,
+    // 番組一覧はキャッシュ経由 (GET /api/programs と取得を共有)。
+    getPrograms,
     listRules: () => keywordRuleStore.list(),
     notify: (n) => notifyIfEnabled("onSchedule", n),
     timeZone,
@@ -216,10 +234,12 @@ if (mirakcUrl !== undefined && apiUrl !== undefined) {
   subscribeMirakcEvents({
     eventsUrl: mirakcEventsUrlOf(mirakcUrl),
     onEvent: async (event) => {
-      // EPG 更新でキーワード録画を都度実行する。イベントはサービス単位で
-      // バーストし、接続直後にも全サービス分のスナップショットが届くため、
-      // trigger 側の debounce で 1 回の実行に畳まれる。
+      // EPG 更新で番組キャッシュを破棄 (次回の getPrograms で再取得) して
+      // キーワード録画を都度実行する。イベントはサービス単位でバーストし、
+      // 接続直後にも全サービス分のスナップショットが届くため、trigger 側の
+      // debounce で 1 回の実行に畳まれる。
       if (event.event === "epg.programs-updated") {
+        programsCache?.invalidate();
         job.trigger();
         return;
       }

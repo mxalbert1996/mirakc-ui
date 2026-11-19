@@ -4,6 +4,7 @@ import { $api } from "../../../lib/api/client.ts";
 import type { components } from "../../../lib/api/schema.d.ts";
 import { serviceOfProgram } from "../../../lib/service.ts";
 import { useProgramQueries } from "../../../hooks/use-program-queries.ts";
+import { fullProgramOf } from "../../../lib/api/programs.ts";
 import { useNow } from "../../../hooks/use-now.ts";
 import { formatYmdHms, zonedFromEpochMs } from "../../../lib/datetime.ts";
 import ProgramModalDetail from "../../../components/organisms/Program/Modal/Detail.tsx";
@@ -23,11 +24,23 @@ function ProgramDetailModal() {
   // 放送状態 (未開始/放送中/終了) を分単位で追従させる。
   const currentDate = zonedFromEpochMs(useNow(60_000));
 
-  const { services, programs, recordingSchedules } = useProgramQueries();
+  const { services, recordingSchedules } = useProgramQueries();
   const addRecordingSchedule = $api.useMutation("post", "/recording/schedules");
   const removeRecordingSchedule = $api.useMutation(
     "delete",
     "/recording/schedules/{program_id}",
+  );
+
+  // 詳細モーダルは description / extended を表示するため、一覧ではなく ID 指定で
+  // フル番組を取得する。取得中はシェルだけ開いて待ち、404 等で取れなければ閉じる。
+  // 非数の programId ではクエリを出さない (isPending が true のままになるため
+  // open の条件からも除外し、モーダルは開かない)。
+  const isNumericId = /^\d+$/.test(programId);
+  const programQuery = $api.useQuery(
+    "get",
+    "/programs/{id}",
+    { params: { path: { id: Number(programId) } } },
+    { enabled: isNumericId },
   );
 
   const invalidateSchedules = () =>
@@ -35,9 +48,7 @@ function ProgramDetailModal() {
       queryKey: ["get", "/recording/schedules"],
     });
 
-  const program = (programs.data ?? []).find(
-    (p) => String(p.id) === programId,
-  );
+  const program = fullProgramOf(programQuery.data);
   const service = program
     ? serviceOfProgram(services.data ?? [], program)
     : undefined;
@@ -82,11 +93,12 @@ function ProgramDetailModal() {
       recordingSchedule={schedule}
       addRecordingSchedule={handleAddRecordingSchedule}
       removeRecordingSchedule={handleRemoveRecordingSchedule}
-      loading={recordingSchedules.isPending ||
+      loading={programQuery.isPending ||
+        recordingSchedules.isPending ||
         addRecordingSchedule.isPending ||
         removeRecordingSchedule.isPending}
       currentDate={currentDate}
-      open={program !== undefined}
+      open={isNumericId && (programQuery.isPending || program !== undefined)}
       onClose={handleClose}
     />
   );
