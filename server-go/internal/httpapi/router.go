@@ -21,6 +21,12 @@ type Deps struct {
 	// KeywordRulesOnChanged fires after a successful rule add/update
 	// (never on delete — removing a rule cancels nothing that exists).
 	KeywordRulesOnChanged func()
+	// MirakcProxy serves /api/mirakc/* (mirakc.NewProxy implements the
+	// unset-URL 500 convention itself). nil → the paths fall through to
+	// the SPA/404 handler.
+	MirakcProxy http.Handler
+	// Programs serves GET /api/programs. nil likewise.
+	Programs http.Handler
 }
 
 // testNotification is the ntfy/Discord test-send payload
@@ -58,6 +64,14 @@ func NewRouter(d Deps) *http.ServeMux {
 	})
 
 	mountNotificationSettings(mux, d)
+
+	if d.MirakcProxy != nil {
+		mux.Handle("/api/mirakc", d.MirakcProxy)
+		mux.Handle("/api/mirakc/", d.MirakcProxy)
+	}
+	if d.Programs != nil {
+		mux.Handle("/api/programs", d.Programs)
+	}
 
 	mux.Handle("/", web.Handler())
 	return mux
