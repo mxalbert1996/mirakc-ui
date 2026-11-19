@@ -461,22 +461,7 @@ func TestCommentsStreamTicketAuth(t *testing.T) {
 }
 
 func mintTicket(t *testing.T, baseURL string) string {
-	t.Helper()
-	req, _ := http.NewRequest("POST", baseURL+"/api/auth/ticket", nil)
-	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("u:stoken")))
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := io.ReadAll(res.Body)
-	res.Body.Close()
-	var body struct {
-		Ticket string `json:"ticket"`
-	}
-	if err := json.Unmarshal(raw, &body); err != nil || body.Ticket == "" {
-		t.Fatalf("mint = %d %q", res.StatusCode, raw)
-	}
-	return body.Ticket
+	return mintTicketWith(t, baseURL, "stoken")
 }
 
 func getStream(t *testing.T, url string) (status int, body string) {
@@ -527,4 +512,66 @@ func TestResolveChannelID(t *testing.T) {
 	if _, ok := resolve(comments.Target{Channel: ""}); ok {
 		t.Fatal("channel-less target must resolve to unsupported")
 	}
+}
+
+func TestTranscodeTicketAuthAndUnsetConvention(t *testing.T) {
+	st := newStore(t)
+	// Unset MIRAKC_URL: the transcode route fails fast with the Go port's
+	// unset convention (Deno crashed on a relative URL with a generic 500
+	// — recorded deviation; the status matches either way).
+	_, ts := newTestApp(t, Deps{Store: st, Auth: httpapi.New("ttoken"), MirakcURL: ""})
+	creds := map[string]string{"Authorization": "Basic " + base64.StdEncoding.EncodeToString([]byte("u:ttoken"))}
+	res, body := call2(t, "GET", ts.URL+"/api/transcode/services/1", creds)
+	if res.StatusCode != 500 || !strings.Contains(body, "MIRAKC_URL is not set") {
+		t.Fatalf("unset transcode = %d %q, want the convention 500", res.StatusCode, body)
+	}
+
+	// The second one-time-ticket path accepts a ticket end to end.
+	ticket := mintTicketWith(t, ts.URL, "ttoken")
+	status, raw := getStream(t, ts.URL+"/api/transcode/services/1?ticket="+ticket)
+	if status != 500 || !strings.Contains(raw, "MIRAKC_URL is not set") {
+		t.Fatalf("ticketed transcode = %d %q — ticket must pass the auth wall (then 500, not 401)", status, raw)
+	}
+
+	res, _ = call2(t, "GET", ts.URL+"/api/transcode/services/1", nil)
+	if res.StatusCode != 401 {
+		t.Fatalf("no creds = %d, want 401", res.StatusCode)
+	}
+}
+
+func call2(t *testing.T, method, url string, headers map[string]string) (*http.Response, string) {
+	t.Helper()
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	return res, string(raw)
+}
+
+func mintTicketWith(t *testing.T, baseURL, token string) string {
+	t.Helper()
+	req, _ := http.NewRequest("POST", baseURL+"/api/auth/ticket", nil)
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("u:"+token)))
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	var body struct {
+		Ticket string `json:"ticket"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil || body.Ticket == "" {
+		t.Fatalf("mint = %d %q", res.StatusCode, raw)
+	}
+	return body.Ticket
 }

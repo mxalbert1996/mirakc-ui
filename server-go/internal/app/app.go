@@ -20,6 +20,7 @@ import (
 	"github.com/mxalbert1996/mirakc-ui/server-go/internal/mirakc"
 	"github.com/mxalbert1996/mirakc-ui/server-go/internal/settings"
 	"github.com/mxalbert1996/mirakc-ui/server-go/internal/store"
+	"github.com/mxalbert1996/mirakc-ui/server-go/internal/transcode"
 )
 
 // Deps are the composed application's inputs. The zero-ish values mirror
@@ -111,6 +112,14 @@ func New(ctx context.Context, d Deps) *App {
 				comments.NewNicoliveSource(resolveChannelID(d.Store, "nicolive")),
 				comments.NewNxJikkyoSource(resolveChannelID(d.Store, "nx-jikkyo")),
 			},
+		}),
+		Transcode: transcode.NewHandler(transcode.Deps{
+			APIURL: apiURLOrEmpty(d.MirakcURL),
+			Client: client,
+			Log:    log,
+			// Resolved once, mirroring the Deno per-request read's only
+			// purpose (probe/production arg consistency within a request).
+			V4L2CQ: transcode.V4L2ConstantQualityEnabled(),
 		}),
 	})
 

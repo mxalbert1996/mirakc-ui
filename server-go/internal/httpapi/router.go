@@ -30,6 +30,9 @@ type Deps struct {
 	// Comments serves GET /api/comments/services/{id}/stream (the
 	// one-time-ticket path). nil likewise.
 	Comments http.Handler
+	// Transcode serves GET /api/transcode/services/{id} (the other
+	// one-time-ticket path). nil likewise.
+	Transcode http.Handler
 }
 
 // testNotification is the ntfy/Discord test-send payload
@@ -77,6 +80,9 @@ func NewRouter(d Deps) *http.ServeMux {
 	}
 	if d.Comments != nil {
 		mux.Handle("GET /api/comments/services/{id}/stream", d.Comments)
+	}
+	if d.Transcode != nil {
+		mux.Handle("GET /api/transcode/services/{id}", d.Transcode)
 	}
 
 	mux.Handle("/", web.Handler())
