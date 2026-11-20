@@ -4,20 +4,20 @@
 
 Fresh の Island Architecture をやめ、クライアント（Vite + React SPA）とサーバ（Hono on Deno）を物理的に分離した。
 
-- **開発**: `deno task dev` が Hono(:8000) と Vite(:5173) を並行起動する。Vite dev server が `/api/*` を Hono へプロキシする（`vite.config.ts` の `server.proxy`）。ブラウザは :5173 のみにアクセスする。
-- **本番**: Hono(:8000) が `client/dist` を `serveStatic` で配信しつつ `/api` を提供する。1 プロセス・1 イメージで watch まで完結する。
+- **開発**: `pnpm dev` が Go API サーバ(:8000) と Vite(:5173) を並行起動する。Vite dev server が `/api/*` を Go サーバへプロキシする（`vite.config.ts` の `server.proxy`）。ブラウザは :5173 のみにアクセスする。
+- **本番**: Go バイナリが埋め込み `client/dist` を配信しつつ `/api` を提供する。1 プロセス・1 イメージで watch まで完結する（旧 Hono サーバの `server/` は移行完了に伴い削除済み）。
 
 ## クライアントルーティング（TanStack Router）
 
 - `client/routes/` の file-based routing。各ルートは `createFileRoute` で定義する。
-- `@tanstack/router-plugin`（Vite プラグイン）が `client/routeTree.gen.ts` を生成する。`vite.config.ts` で `addExtensions: true` を指定し、生成される import に `.tsx` を付与している（Deno は拡張子必須のため、これが無いと `deno check` が通らない）。
+- `@tanstack/router-plugin`（Vite プラグイン）が `client/routeTree.gen.ts` を生成する。`vite.config.ts` で `addExtensions: true` を指定し、生成される import に `.tsx` を付与している（Node/Vite では必須ではないが、従来の生成物と同じ形を保つため）。
 - URL 状態は `validateSearch` で型付き search param として定義し、`useNavigate` で更新する。番組表 `?d=<timestamp>`、検索 `?q=`、視聴 `audioTrack` / `quality` / `caption`。
 - ページ遷移は `<Link>`（フルリロード回避、`defaultPreload:"intent"` でホバー時プリフェッチ）。
 - watch のサービス選択は history state（`selected`）でリスト操作と直リンクを区別し、Player の autoplay unmute 判定に使う。`HistoryState` は `client/main.tsx` の `declare module` で拡張している。
 
-## API プロキシ（Hono）
+## API プロキシ（Go）
 
-`server/routes/mirakc.ts` が mirakc バックエンドへのプロキシとして機能する。環境変数 `MIRAKC_URL`（mirakc のベース URL）から `server/lib/mirakc.ts` で API URL（`/api`）を組み立てる。`server/main.ts` で `/api/mirakc` にマウント。CORS 回避のためサーバーサイドプロキシパターンを採用。
+`server-go/internal/mirakc` の `NewProxy` が mirakc バックエンドへのプロキシとして機能する。環境変数 `MIRAKC_URL`（mirakc のベース URL）から `APIURL` / `EventsURL` で API URL（`/api`）と SSE（`/events`）を組み立てる。`internal/app` が `/api/mirakc` にマウント。CORS 回避のためサーバーサイドプロキシパターンを採用。
 
 ## サーバー状態（TanStack Query）
 
@@ -43,4 +43,4 @@ Fresh の Island Architecture をやめ、クライアント（Vite + React SPA�
 
 `client/locales/ja-JP/` にスコープ別翻訳ファイル（common, program, recording, search, watch 等）。SPA 化により SSR 時の `getFixedT` 問題は消えた。
 
-server 側の表示文言（ntfy 通知の文面等）も同じ構成の `server/locales/`（`ja-JP/<namespace>.ts` + `translation.ts` + `i18n.ts` の `t()`）で管理する。server は単一ロケール・`{{var}}` 補間のみで足りるため i18next は使わず、軽量な `t()` を実装している（未知キーはキーをそのまま返す挙動も i18next に合わせてある）。ログ・API エラーメッセージは表示文言ではないため対象外。
+server 側の表示文言（ntfy 通知の文面等）は `server-go/internal/i18n` が Go マップとして埋め込む（単一ロケール・`{{var}}` 補間のみ。未知キーはキーをそのまま返す挙動も i18next に合わせてある）。ログ・API エラーメッセージは表示文言ではないため対象外。

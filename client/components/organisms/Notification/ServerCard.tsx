@@ -46,66 +46,40 @@ export default function ServerCard(props: Props) {
         </span>
         <div>
           <h2 className={styles.title}>{t("notification.server.title")}</h2>
-          <p className={styles.description}>
-            {t("notification.server.description")}
-          </p>
+          <p className={styles.description}>{t("notification.server.description")}</p>
         </div>
       </div>
 
       <div className={styles.body}>
         <div className={styles.field}>
           <div className={styles.fieldHead}>
-            <span className={styles.fieldLabel}>
-              {t("notification.server.url")}
-            </span>
+            <span className={styles.fieldLabel}>{t("notification.server.url")}</span>
           </div>
           <input
             type="text"
-            className={`${styles.input} ${
-              props.urlError !== undefined ? styles.inputBad : ""
-            }`}
+            className={`${styles.input} ${props.urlError !== undefined ? styles.inputBad : ""}`}
             value={props.url}
             placeholder={t("notification.server.urlPlaceholder")}
             spellCheck={false}
             autoComplete="off"
             onChange={(event) => props.onChangeUrl(event.target.value)}
           />
-          {props.urlError === "invalid"
-            ? (
-              <p className={styles.fieldError}>
-                {t("notification.server.urlInvalid")}
-              </p>
-            )
-            : props.urlError === "required"
-            ? (
-              <p className={styles.fieldError}>
-                {t("notification.server.urlRequired")}
-              </p>
-            )
-            : (
-              <p className={styles.fieldHint}>
-                {t("notification.server.urlHint")}
-              </p>
-            )}
+          {props.urlError === "invalid" ? (
+            <p className={styles.fieldError}>{t("notification.server.urlInvalid")}</p>
+          ) : props.urlError === "required" ? (
+            <p className={styles.fieldError}>{t("notification.server.urlRequired")}</p>
+          ) : (
+            <p className={styles.fieldHint}>{t("notification.server.urlHint")}</p>
+          )}
         </div>
 
         <div className={styles.field}>
           <div className={styles.fieldHead}>
-            <span className={styles.fieldLabel}>
-              {t("notification.server.token")}
-            </span>
-            <span className={styles.optTag}>
-              {t("notification.server.optional")}
-            </span>
+            <span className={styles.fieldLabel}>{t("notification.server.token")}</span>
+            <span className={styles.optTag}>{t("notification.server.optional")}</span>
             {props.tokenSet && (
-              <span
-                className={props.tokenClearPending
-                  ? styles.setTagPending
-                  : styles.setTag}
-              >
-                <Icon size={12}>
-                  {props.tokenClearPending ? "delete" : "check_circle"}
-                </Icon>
+              <span className={props.tokenClearPending ? styles.setTagPending : styles.setTag}>
+                <Icon size={12}>{props.tokenClearPending ? "delete" : "check_circle"}</Icon>
                 {props.tokenClearPending
                   ? t("notification.server.tokenClearPending")
                   : t("notification.server.tokenConfigured")}
@@ -128,9 +102,11 @@ export default function ServerCard(props: Props) {
               type={showToken ? "text" : "password"}
               className={`${styles.input} ${styles.tokenInput}`}
               value={props.token}
-              placeholder={props.tokenSet
-                ? t("notification.server.tokenConfiguredPlaceholder")
-                : t("notification.server.tokenPlaceholder")}
+              placeholder={
+                props.tokenSet
+                  ? t("notification.server.tokenConfiguredPlaceholder")
+                  : t("notification.server.tokenPlaceholder")
+              }
               spellCheck={false}
               autoComplete="off"
               onChange={(event) => props.onChangeToken(event.target.value)}
@@ -138,19 +114,15 @@ export default function ServerCard(props: Props) {
             <button
               type="button"
               className={styles.eyeButton}
-              aria-label={showToken
-                ? t("notification.server.hideToken")
-                : t("notification.server.showToken")}
+              aria-label={
+                showToken ? t("notification.server.hideToken") : t("notification.server.showToken")
+              }
               onClick={() => setShowToken(!showToken)}
             >
-              <Icon size={16}>
-                {showToken ? "visibility_off" : "visibility"}
-              </Icon>
+              <Icon size={16}>{showToken ? "visibility_off" : "visibility"}</Icon>
             </button>
           </div>
-          <p className={styles.fieldHint}>
-            {t("notification.server.tokenHint")}
-          </p>
+          <p className={styles.fieldHint}>{t("notification.server.tokenHint")}</p>
         </div>
       </div>
 

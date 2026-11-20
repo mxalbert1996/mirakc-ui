@@ -4,17 +4,16 @@
  * このエンドポイントは mirakc ではなく mirakc-ui 自身の Hono が提供するため、
  * mirakc の OpenAPI から生成する $api (openapi-react-query) には含まれない。
  * 素の fetch を薄くラップする。型は docs/api の OpenAPI から
- * `deno task generate:internal` で生成した JSON Schema 定数
- * (server/lib/api/internal-schemas.ts) を単一ソースとし、server と同じく
+ * 旧 `deno task generate:internal`（廃止済み。同じ中身は docs/api の
+ * `emit-server-schemas` で再生成できる）が生成した JSON Schema 定数
+ * (client/lib/api/internal-schemas.ts) を単一ソースとし、Go サーバと同じく
  * json-schema-to-ts の FromSchema で導出する。
  */
 import type { FromSchema } from "json-schema-to-ts";
-import type { internalSchemas } from "../../../server/lib/api/internal-schemas.ts";
+import type { internalSchemas } from "./internal-schemas.ts";
 
-export type KeywordRule = FromSchema<typeof internalSchemas["KeywordRule"]>;
-export type KeywordRuleInput = FromSchema<
-  typeof internalSchemas["KeywordRuleInput"]
->;
+export type KeywordRule = FromSchema<(typeof internalSchemas)["KeywordRule"]>;
+export type KeywordRuleInput = FromSchema<(typeof internalSchemas)["KeywordRuleInput"]>;
 
 const BASE_PATH = "/api/keyword-rules";
 
@@ -27,9 +26,7 @@ async function ensureOk(res: Response): Promise<Response> {
 }
 
 /** ルール一覧を取得する。 */
-export async function fetchKeywordRules(
-  fetchFn: typeof fetch = fetch,
-): Promise<KeywordRule[]> {
+export async function fetchKeywordRules(fetchFn: typeof fetch = fetch): Promise<KeywordRule[]> {
   const res = await ensureOk(await fetchFn(BASE_PATH));
   return await res.json();
 }
@@ -66,10 +63,7 @@ export async function updateKeywordRule(
 }
 
 /** ルールを削除する。 */
-export async function removeKeywordRule(
-  id: string,
-  fetchFn: typeof fetch = fetch,
-): Promise<void> {
+export async function removeKeywordRule(id: string, fetchFn: typeof fetch = fetch): Promise<void> {
   const res = await ensureOk(
     await fetchFn(`${BASE_PATH}/${encodeURIComponent(id)}`, {
       method: "DELETE",

@@ -1,10 +1,6 @@
 import type { ReactNode } from "react";
 import type { components } from "../../lib/api/schema.d.ts";
-import {
-  type ChannelType,
-  channelTypeLabel,
-  sortServices,
-} from "../../lib/service.ts";
+import { type ChannelType, channelTypeLabel, sortServices } from "../../lib/service.ts";
 import { startOfHourEpochMs } from "../../lib/datetime.ts";
 import { useHotkey } from "../../hooks/use-hotkey.ts";
 import { t } from "../../locales/i18n.ts";
@@ -88,28 +84,26 @@ export default function Program(props: Props) {
         onOpenWatch={props.onOpenWatch}
         onOpenSettings={props.onOpenSettings}
       />
-      {filteredServices.length === 0
-        ? (
-          <Empty
-            title={t("program.empty.title", {
-              channelType: channelTypeLabel(channelType),
-            })}
-            description={t("program.empty.description", {
-              channelType: channelTypeLabel(channelType),
-            })}
-          />
-        )
-        : (
-          <ProgramTable
-            services={filteredServices}
-            programs={props.programs}
-            recordingSchedules={props.recordingSchedules}
-            displayFromMs={displayFromMs}
-            displayToMs={displayToMs}
-            setProgram={props.onSelectProgram}
-            currentDate={props.currentDate}
-          />
-        )}
+      {filteredServices.length === 0 ? (
+        <Empty
+          title={t("program.empty.title", {
+            channelType: channelTypeLabel(channelType),
+          })}
+          description={t("program.empty.description", {
+            channelType: channelTypeLabel(channelType),
+          })}
+        />
+      ) : (
+        <ProgramTable
+          services={filteredServices}
+          programs={props.programs}
+          recordingSchedules={props.recordingSchedules}
+          displayFromMs={displayFromMs}
+          displayToMs={displayToMs}
+          setProgram={props.onSelectProgram}
+          currentDate={props.currentDate}
+        />
+      )}
 
       {props.children}
     </div>

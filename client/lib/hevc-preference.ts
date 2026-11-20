@@ -35,8 +35,10 @@ export function setHevcPreferred(enabled: boolean): void {
  */
 export function canPlayHevc(): boolean {
   try {
-    return typeof MediaSource !== "undefined" &&
-      MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L93.B0"');
+    return (
+      typeof MediaSource !== "undefined" &&
+      MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L93.B0"')
+    );
   } catch {
     return false;
   }

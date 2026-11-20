@@ -16,9 +16,7 @@ describe("ColorSchemeToggle", () => {
     render(<ColorSchemeToggle />);
 
     expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(
-      screen.getByRole("button", { name: "Color scheme: dark" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Color scheme: dark" })).toBeTruthy();
   });
 
   it("dark からクリックすると auto に戻る", () => {
@@ -37,9 +35,7 @@ describe("ColorSchemeToggle", () => {
     render(<ColorSchemeToggle />);
 
     expect(document.documentElement.dataset.theme).toBeUndefined();
-    expect(
-      screen.getByRole("button", { name: "Color scheme: auto" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Color scheme: auto" })).toBeTruthy();
   });
 
   it("auto からクリックすると light を保存する", () => {

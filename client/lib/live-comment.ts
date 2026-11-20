@@ -1,4 +1,4 @@
-import type { CommentSourceId } from "../../server/lib/comments/types.ts";
+import type { CommentSourceId } from "./shared/comment-types.ts";
 
 /**
  * 実況コメント 1 件。データ源 (ニコ生 / NX-Jikkyo 等) に非依存な表示用の型。

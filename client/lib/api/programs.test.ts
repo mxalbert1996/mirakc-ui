@@ -32,8 +32,7 @@ describe("programs api client", () => {
       return Promise.resolve(Response.json([slim]));
     }) as typeof fetch;
 
-    expect(await fetchSlimPrograms({ from: 1000, to: 2000 }, fetchFn))
-      .toEqual([slim]);
+    expect(await fetchSlimPrograms({ from: 1000, to: 2000 }, fetchFn)).toEqual([slim]);
   });
 
   it("fetchSlimPrograms: from/to は片方だけでは付けない", async () => {
@@ -46,13 +45,9 @@ describe("programs api client", () => {
   });
 
   it("fetchSlimPrograms: エラー応答は throw する", async () => {
-    const fetchFn =
-      (() =>
-        Promise.resolve(new Response("ng", { status: 500 }))) as typeof fetch;
+    const fetchFn = (() => Promise.resolve(new Response("ng", { status: 500 }))) as typeof fetch;
 
-    await expect(
-      fetchSlimPrograms({ from: 1, to: 2 }, fetchFn),
-    ).rejects.toThrow();
+    await expect(fetchSlimPrograms({ from: 1, to: 2 }, fetchFn)).rejects.toThrow();
   });
 
   it("fullProgramOf: 実応答どおり単一オブジェクトで来たらそのまま返す", () => {

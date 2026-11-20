@@ -3,7 +3,7 @@
  *
  * mirakc の GET /programs は全番組の詳細 (description / extended 等) を含む巨大な
  * ダンプ (~24MB) になるため、mirakc-ui 自身の Hono が slim 化した一覧を返す専用
- * エンドポイントを用意している (server/lib/programs-cache.ts)。$api (mirakc の
+ * エンドポイントを用意している (server-go の programs cache)。$api (mirakc の
  * OpenAPI から生成) には含まれないため、keyword-rules と同じく素の fetch を
  * 薄くラップする。slim 一覧に無い description / extended 等が必要な場合は
  * getProgram (GET /api/mirakc/programs/{id}) で個別に取得する。
@@ -20,13 +20,7 @@ type MirakurunProgram = components["schemas"]["MirakurunProgram"];
  */
 export type SlimProgram = Omit<
   MirakurunProgram,
-  | "audio"
-  | "audios"
-  | "description"
-  | "extended"
-  | "relatedItems"
-  | "series"
-  | "video"
+  "audio" | "audios" | "description" | "extended" | "relatedItems" | "series" | "video"
 >;
 
 const BASE_PATH = "/api/programs";
@@ -64,9 +58,7 @@ export async function fetchSlimPrograms(
  * 実装 (mirakc 本体) は単一オブジェクトを返す。生成型と実応答の食い違いをここで
  * 吸収し、どちらの形でも動くように正規化する。
  */
-export function fullProgramOf(
-  data: MirakurunProgram[] | undefined,
-): MirakurunProgram | undefined {
+export function fullProgramOf(data: MirakurunProgram[] | undefined): MirakurunProgram | undefined {
   if (Array.isArray(data)) {
     return data[0];
   }

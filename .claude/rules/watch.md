@@ -6,26 +6,26 @@
 
 ## トランスコード API
 
-`server/routes/transcode.ts`（Hono、`/api/transcode/services/:id`）。パイプラインは mirakc のサービスストリーム → `tsreadex`（字幕・音声整形）→ `ffmpeg`（H.264 / AAC に再エンコード）→ MPEG-TS をチャンク応答。client 切断・子プロセス異常終了・上流切断の各経路から冪等な cleanup（SIGTERM → 3 秒後 SIGKILL）を発火する。
+`server-go/internal/transcode` の `NewHandler`（`/api/transcode/services/{id}`）。パイプラインは mirakc のサービスストリーム → `tsreadex`（字幕・音声整形）→ `ffmpeg`（H.264 / AAC に再エンコード）→ MPEG-TS をチャンク応答。client 切断・子プロセス異常終了・上流切断の各経路から冪等な cleanup（SIGTERM → 3 秒後 SIGKILL）を発火する。
 
 ## 再生
 
-- `mpegts.js`（MSE ベース、esm.sh の `1.8.0`）で `<video>` にアタッチ
-- `aribb24.js`（npm の `2.0.19`）で ARIB 字幕を canvas オーバーレイ
+- `mpegts.js`（MSE ベース、npm 依存 `1.8.0`）で `<video>` にアタッチ
+- `aribb24.js`（npm の `2.0.25`）で ARIB 字幕を canvas オーバーレイ
 
 ## HW エンコーダー自動検出
 
-`server/lib/encoder.ts`。起動時に `h264_v4l2m2m` と `libx264` を順に**実エンコードテスト (probe)** で検証し、成功した方をキャッシュ。WSL2 等でカーネルモジュール不在の場合は `libx264` にフォールバック。両方失敗時は `503 No usable H.264 encoder found` を返す。`null` はキャッシュしない。並行リクエストのレースは `detectingPromise` で直列化する。
+`server-go/internal/transcode`。リクエストごとに `h264_v4l2m2m`（→ `hevc_v4l2m2m`）と `libx264` の順で**実エンコードテスト (probe)** を検証する（EBUSY は最初の busy から 500ms の窓内で再試行）。デバイス不在の場合は `libx264` にフォールバック。全候補失敗時は `503 No usable video encoder found`。
 
 ## デバッグログ
 
-tsreadex / ffmpeg / encoder-probe の stderr は `[tsreadex]` / `[ffmpeg]` / `[encoder-probe ${name}]` のプレフィックス付きで `console.error` に出力する（`docker logs mirakc-ui-app-1` で確認可）。
+tsreadex / ffmpeg の stderr は slog が `[tsreadex]` / `[ffmpeg]` プレフィックス付きで JSON ログ化する。`docker logs <コンテナ>` で確認可。
 
 ## URL 状態管理
 
 - `serviceId` はパスパラメータ（`/watch/$serviceId`）
 - `audioTrack` / `quality` / `caption` は `validateSearch` による型付きクエリパラメータ
-- 画質プリセット（`Quality` 型 / `qualities` / `defaultQuality` / `normalizeQuality`）は `server/lib/quality.ts` が単一ソース。client（画質メニュー・URL クエリ検証・視聴開始リンクの既定値 `client/lib/watch-search.ts`）と server（transcode API）の両方がここを参照する。ffmpeg の scale / bitrate 対応は `server/lib/encoder.ts` の `qualitySettings`
+- 画質プリセット（`Quality` 型 / `qualities` / `defaultQuality` / `normalizeQuality`）は `client/lib/shared/quality.ts` が client 側の単一ソース。server 側は `server-go/internal/transcode` が同じ値を Go として持つ（ドリフトは spec と実装テストで検出）。ffmpeg の scale / bitrate 対応は `qualitySettings`
 - サービス選択が「リスト操作由来」か「直リンク」かは history state（`selected`）で区別し、Player の autoplay unmute 判定に使う（`HistoryState` を `client/main.tsx` の `declare module` で拡張）
 
 ## 既知の制限
@@ -35,7 +35,7 @@ tsreadex / ffmpeg / encoder-probe の stderr は `[tsreadex]` / `[ffmpeg]` / `[e
 
 ## 解消済みの制限
 
-- 〜 aribb24.js 2.0.16: ブラウザウィンドウ拡大時に ARIB 字幕がほぼ表示されなくなる magnification バグがあった（[issue #15](https://github.com/ansanloms/mirakc-ui/issues/15)）。upstream の monyone/aribb24.js 2.0.17 で修正済み。本リポジトリは npm の 2.0.19 を使用。
+- 〜 aribb24.js 2.0.16: ブラウザウィンドウ拡大時に ARIB 字幕がほぼ表示されなくなる magnification バグがあった（[issue #15](https://github.com/ansanloms/mirakc-ui/issues/15)）。upstream の monyone/aribb24.js 2.0.17 で修正済み。本リポジトリは npm の 2.0.25 を使用。
 
 ## トランスコード方式
 

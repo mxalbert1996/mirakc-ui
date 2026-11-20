@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "ignorePatterns": [
+    "coverage/",
+    "client/dist/",
+    "client/routeTree.gen.ts",
+    "client/lib/api/schema.d.ts",
+    "storybook-static/",
+    "docs/",
+    "server-go/",
+    ".design-sync/",
+    "ds-bundle/",
+    "data/"
+  ]
+}

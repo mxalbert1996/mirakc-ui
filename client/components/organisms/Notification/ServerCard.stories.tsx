@@ -7,10 +7,13 @@ const meta = {
   args: {
     url: "https://ntfy.sh/mirakc-rec",
     token: "tk_xxxxxxxxxxxxxxxx",
+    tokenSet: false,
+    tokenClearPending: false,
     testEnabled: true,
     testing: false,
     onChangeUrl: () => {},
     onChangeToken: () => {},
+    onToggleTokenClear: () => {},
     onTest: () => {},
   },
 } satisfies Meta<typeof ServerCard>;

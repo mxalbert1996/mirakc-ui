@@ -1,8 +1,7 @@
 export default {
   title: "通知設定",
   subtitle: "録画イベントを ntfy.sh / Discord で通知します。",
-  lead:
-    "録画の開始・終了などを ntfy.sh のトピックや Discord のチャンネルへ送信します。通知を受け取りたい送信先を有効にしてください（両方を同時に使えます）。",
+  lead: "録画の開始・終了などを ntfy.sh のトピックや Discord のチャンネルへ送信します。通知を受け取りたい送信先を有効にしてください（両方を同時に使えます）。",
   loading: "通知設定を読み込んでいます",
   settings: "設定へ",
   epg: "番組表へ",
@@ -11,22 +10,18 @@ export default {
     description: "通知の送信先トピックと認証情報",
     url: "NTFY の URL",
     urlPlaceholder: "https://ntfy.sh/mirakc-rec",
-    urlHint:
-      "トピック名まで含めた公開 URL を入力します（空欄で ntfy 通知を無効）",
+    urlHint: "トピック名まで含めた公開 URL を入力します（空欄で ntfy 通知を無効）",
     urlInvalid: "http(s) で始まる URL を入力してください",
-    urlRequired:
-      "通知を送信するには ntfy か Discord のいずれかの URL が必要です",
+    urlRequired: "通知を送信するには ntfy か Discord のいずれかの URL が必要です",
     token: "NTFY の TOKEN",
     tokenPlaceholder: "tk_xxxxxxxxxxxxxxxx",
-    tokenHint:
-      "アクセス制限のあるトピックの場合に設定します（Authorization: Bearer として送信）",
+    tokenHint: "アクセス制限のあるトピックの場合に設定します（Authorization: Bearer として送信）",
     showToken: "トークンを表示",
     hideToken: "トークンを隠す",
     test: "ntfy にテスト送信",
     optional: "任意",
     tokenConfigured: "設定済み",
-    tokenConfiguredPlaceholder:
-      "保存済みです。入力すると置き換わり、空欄のままなら保持されます",
+    tokenConfiguredPlaceholder: "保存済みです。入力すると置き換わり、空欄のままなら保持されます",
     tokenClearPending: "削除予定",
     clear: "クリア",
     clearCancel: "取り消す",
@@ -39,11 +34,9 @@ export default {
     urlHint:
       "チャンネル設定 → 連携サービス → ウェブフック で発行した URL を入力します（空欄で Discord 通知を無効）",
     urlInvalid: "Discord の Webhook URL を入力してください",
-    urlRequired:
-      "通知を送信するには ntfy か Discord のいずれかの URL が必要です",
+    urlRequired: "通知を送信するには ntfy か Discord のいずれかの URL が必要です",
     urlConfigured: "設定済み",
-    urlConfiguredPlaceholder:
-      "保存済みです。入力すると置き換わり、空欄のままなら保持されます",
+    urlConfiguredPlaceholder: "保存済みです。入力すると置き換わり、空欄のままなら保持されます",
     urlClearPending: "削除予定",
     clear: "クリア",
     clearCancel: "取り消す",

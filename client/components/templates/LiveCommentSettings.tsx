@@ -70,10 +70,7 @@ export default function LiveCommentSettings(props: Props) {
   // する ChannelGroup を持たない割り当ては末尾へ回し、channel id の昇順で安定
   // させる。
   const channelOrder = new Map(
-    sortChannelGroups(props.channels).map((channel, index) => [
-      channel.id,
-      index,
-    ]),
+    sortChannelGroups(props.channels).map((channel, index) => [channel.id, index]),
   );
   const sorted = [...props.mappings].sort((a, b) => {
     const ai = channelOrder.get(a.channel);
@@ -119,83 +116,67 @@ export default function LiveCommentSettings(props: Props) {
 
       <main className={styles.page}>
         <div className={styles.pageInner}>
-          {props.mappings.length === 0
-            ? (
-              <div className={styles.empty}>
-                <span className={styles.emptyIcon}>
-                  <Icon size={44}>forum</Icon>
-                </span>
-                <h2 className={styles.emptyTitle}>
-                  {t("liveComment.empty.title")}
-                </h2>
-                <p className={styles.emptyText}>
-                  {t("liveComment.empty.description")}
-                </p>
-                <div className={styles.emptyActions}>
-                  <button
-                    type="button"
-                    className={styles.addButton}
-                    onClick={props.onAdd}
-                  >
-                    <Icon size={16}>add</Icon>
-                    {t("liveComment.add")}
-                  </button>
+          {props.mappings.length === 0 ? (
+            <div className={styles.empty}>
+              <span className={styles.emptyIcon}>
+                <Icon size={44}>forum</Icon>
+              </span>
+              <h2 className={styles.emptyTitle}>{t("liveComment.empty.title")}</h2>
+              <p className={styles.emptyText}>{t("liveComment.empty.description")}</p>
+              <div className={styles.emptyActions}>
+                <button type="button" className={styles.addButton} onClick={props.onAdd}>
+                  <Icon size={16}>add</Icon>
+                  {t("liveComment.add")}
+                </button>
+                <DefaultsButton
+                  regions={props.regions}
+                  busy={props.applyingDefaults}
+                  onApply={props.onApplyDefaults}
+                />
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className={styles.pageHead}>
+                <div className={styles.pageHeadText}>
+                  <h2 className={styles.pageTitle}>{t("liveComment.head.title")}</h2>
+                  <p className={styles.pageSummary}>
+                    {t("liveComment.head.summary", {
+                      total: props.mappings.length,
+                      enabled: enabledCount,
+                    })}
+                  </p>
+                </div>
+                <button type="button" className={styles.addButton} onClick={props.onAdd}>
+                  <Icon size={16}>add</Icon>
+                  {t("liveComment.add")}
+                </button>
+              </div>
+              {props.regions.length > 0 && (
+                <div className={styles.defaultsRow}>
                   <DefaultsButton
                     regions={props.regions}
                     busy={props.applyingDefaults}
                     onApply={props.onApplyDefaults}
                   />
                 </div>
-              </div>
-            )
-            : (
-              <>
-                <div className={styles.pageHead}>
-                  <div className={styles.pageHeadText}>
-                    <h2 className={styles.pageTitle}>
-                      {t("liveComment.head.title")}
-                    </h2>
-                    <p className={styles.pageSummary}>
-                      {t("liveComment.head.summary", {
-                        total: props.mappings.length,
-                        enabled: enabledCount,
-                      })}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    className={styles.addButton}
-                    onClick={props.onAdd}
-                  >
-                    <Icon size={16}>add</Icon>
-                    {t("liveComment.add")}
-                  </button>
-                </div>
-                {props.regions.length > 0 && (
-                  <div className={styles.defaultsRow}>
-                    <DefaultsButton
-                      regions={props.regions}
-                      busy={props.applyingDefaults}
-                      onApply={props.onApplyDefaults}
+              )}
+              <ul className={styles.list}>
+                {sorted.map((mapping) => (
+                  <li key={mapping.id}>
+                    <MappingCard
+                      mapping={mapping}
+                      channel={channelOf(mapping)}
+                      disabled={props.busy}
+                      onToggle={() => props.onToggle(mapping)}
+                      onEdit={() => props.onEdit(mapping)}
+                      onRemove={() => props.onRemove(mapping)}
                     />
-                  </div>
-                )}
-                <ul className={styles.list}>
-                  {sorted.map((mapping) => (
-                    <li key={mapping.id}>
-                      <MappingCard
-                        mapping={mapping}
-                        channel={channelOf(mapping)}
-                        disabled={props.busy}
-                        onToggle={() => props.onToggle(mapping)}
-                        onEdit={() => props.onEdit(mapping)}
-                        onRemove={() => props.onRemove(mapping)}
-                      />
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </div>
       </main>
 

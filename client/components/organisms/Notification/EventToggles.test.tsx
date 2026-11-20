@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import EventToggles from "./EventToggles.tsx";
-import { NOTIFICATION_EVENT_KEYS } from "../../../../server/lib/notification-settings.ts";
+import { NOTIFICATION_EVENT_KEYS } from "../../../lib/shared/notification-settings.ts";
 import { t } from "../../../locales/i18n.ts";
 
 const allOn = {

@@ -5,7 +5,7 @@
  * 素の fetch を薄くラップする。docs/api の OpenAPI が単一ソースだが、§6.2 の
  * 書き込み専用シークレット変更で GET (応答) と PUT (入力) の形状が分かれた
  * ため、ここでは docs/api の契約に従う型を明示する (サーバー側はこれまで通り
- * `deno task generate:internal` 生成の JSON Schema から導く)。シークレット
+ * 旧 `deno task generate:internal`（廃止済み）生成の JSON Schema から導く)。シークレット
  * (ntfy の token / Discord の Webhook URL) は GET が値を返さず
  * tokenSet / discordWebhookUrlSet のフラグのみで、PUT では省略か空文字なら
  * 保存済み値を保持し、非空なら置き換える。

@@ -1,0 +1,13 @@
+# Deliberately weakens pnpm's supply-chain guard: mpegts.js depends on a
+# github fork of webworkify-webpack, which the npm-family resolvers can only
+# satisfy via a git-resolved subdependency. Removing this breaks install.
+blockExoticSubdeps: false
+# Allow esbuild to run its postinstall (downloads the platform binary used by
+# Vite). Nothing else is allowed to execute install scripts.
+allowBuilds:
+  esbuild: true
+# router-plugin ships pnpm "agent skills" the team does not use; deny them so
+# installs do not print an approval notice.
+permissions:
+  "@tanstack/router-plugin":
+    skills: false

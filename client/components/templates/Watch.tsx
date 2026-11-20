@@ -4,7 +4,7 @@ import { extractProgramMarks } from "../../lib/program-status.ts";
 import type { components } from "../../lib/api/schema.d.ts";
 import type { ChannelType } from "../../lib/service.ts";
 import type { LiveComment } from "../../lib/live-comment.ts";
-import type { CommentSourceId } from "../../../server/lib/comments/types.ts";
+import type { CommentSourceId } from "../../lib/shared/comment-types.ts";
 import WatchPlayer from "../organisms/Watch/Player.tsx";
 import TabPanel from "../organisms/Watch/TabPanel.tsx";
 import type { TabId } from "../organisms/Watch/TabPanel.tsx";
@@ -121,21 +121,15 @@ export default function Watch(props: Props) {
                 {service && <span className={styles.ch}>{service.name}</span>}
                 <span className={styles.dot}>·</span>
                 <span>
-                  {formatMd(program.startAt)}
-                  ({formatWeekday(program.startAt)}){"　"}
-                  {formatHm(program.startAt)} –{" "}
-                  {formatHm(program.startAt + program.duration)}
+                  {formatMd(program.startAt)}({formatWeekday(program.startAt)}){"　"}
+                  {formatHm(program.startAt)} – {formatHm(program.startAt + program.duration)}
                 </span>
               </div>
             </div>
           )}
         </main>
 
-        <TabPanel
-          tab={props.tab}
-          onChangeTab={props.onChangeTab}
-          liveCount={props.comments.length}
-        >
+        <TabPanel tab={props.tab} onChangeTab={props.onChangeTab} liveCount={props.comments.length}>
           {props.tab === "select" && (
             <SelectTab
               channelType={props.channelType}

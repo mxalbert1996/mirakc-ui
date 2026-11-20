@@ -10,13 +10,7 @@ import "../client/assets/styles/layout.css";
 // downlevel する際、color-scheme を宣言するセレクタにしか変数上書きを生成しない。
 // Storybook のビルドも Vite の既定ターゲットで圧縮されるため、ラッパー要素への
 // color-scheme 指定では本番ビルドで効かない。
-function ThemeScope({
-  theme,
-  children,
-}: {
-  theme: string;
-  children: ReactNode;
-}) {
+function ThemeScope({ theme, children }: { theme: string; children: ReactNode }) {
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);

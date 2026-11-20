@@ -24,7 +24,8 @@ export async function fetchStreamTicket(): Promise<string | null> {
     }
     const body: unknown = await response.json();
     if (
-      typeof body === "object" && body !== null &&
+      typeof body === "object" &&
+      body !== null &&
       typeof (body as { ticket?: unknown }).ticket === "string"
     ) {
       return (body as { ticket: string }).ticket;

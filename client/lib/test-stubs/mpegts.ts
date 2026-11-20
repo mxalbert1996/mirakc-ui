@@ -1,11 +1,10 @@
-// Vitest 用の mpegts.js スタブ。
+// Vitest stub for mpegts.js.
 //
-// Player.tsx は `import("mpegts.js")` (deno.json で esm.sh の URL に解決) を
-// 動的 import する。vitest.config の Vite には deno() プラグインが無く、この
-// URL import を静的解析時に解決できずスイート読み込みごと失敗する。テストでは
-// Player にローダーを pending で注入して実行はさせないが、Vite の import 解析は
-// 走るため、解決可能なローカルスタブへ alias する (vitest.config.ts の
-// test.alias)。スタブの中身は呼ばれない想定なので最小限にする。
+// Player.tsx dynamically imports "mpegts.js". The real package pulls in
+// worker-bundling machinery that is irrelevant to tests, so the tests inject
+// a pending loader into Player and never execute it; vitest.config.ts aliases
+// the bare import to this local stub so module resolution still succeeds.
+// The stub is never expected to be called, hence minimal.
 export default {
   isSupported: () => false,
   createPlayer: () => ({}),

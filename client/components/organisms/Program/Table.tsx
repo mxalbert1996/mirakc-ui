@@ -61,9 +61,7 @@ const TIME_COL = 5.6;
  * 見せる。`hasLogoData` は古いことがある (取得失敗) ので、読み込みに失敗したら
  * 画像ごと消して番号 + 局名だけの見出しに戻す (見出しの高さは固定)。
  */
-function ServiceLogo(
-  { service }: { service: components["schemas"]["MirakurunService"] },
-) {
+function ServiceLogo({ service }: { service: components["schemas"]["MirakurunService"] }) {
   const [failed, setFailed] = useState(false);
   const url = serviceLogoUrl(service);
   if (!url || failed) {
@@ -95,12 +93,11 @@ export default function ProgramTable(props: Props) {
     }
     const startAt = program.startAt;
     const endAt = program.startAt + program.duration;
-    return (startAt > fromMs && startAt < toMs) ||
-      (endAt > fromMs && endAt < toMs);
+    return (startAt > fromMs && startAt < toMs) || (endAt > fromMs && endAt < toMs);
   });
 
   const services = props.services.filter((service) =>
-    programs.some((program) => program.serviceId === service.serviceId)
+    programs.some((program) => program.serviceId === service.serviceId),
   );
 
   const now = props.currentDate.epochMilliseconds;
@@ -112,9 +109,10 @@ export default function ProgramTable(props: Props) {
       <div
         className={styles.grid}
         style={{
-          gridTemplateColumns: `${TIME_COL}rem repeat(${
-            Math.max(services.length, 1)
-          }, var(--service-col))`,
+          gridTemplateColumns: `${TIME_COL}rem repeat(${Math.max(
+            services.length,
+            1,
+          )}, var(--service-col))`,
         }}
       >
         <div className={styles.cornerHead} />
@@ -142,9 +140,7 @@ export default function ProgramTable(props: Props) {
             key={`guide-${service.id}`}
             className={styles.columnGuide}
             style={{
-              left: `calc(${TIME_COL}rem + ${
-                index + 1
-              } * var(--service-col) - 1px)`,
+              left: `calc(${TIME_COL}rem + ${index + 1} * var(--service-col) - 1px)`,
             }}
             aria-hidden="true"
           />
@@ -158,19 +154,16 @@ export default function ProgramTable(props: Props) {
               className={styles.timeCell}
               style={{ gridRow: `${hour * 60 + 2} / ${(hour + 1) * 60 + 2}` }}
             >
-              <span className={styles.timeNum}>
-                {formatH(hourMs)}
-              </span>
+              <span className={styles.timeNum}>{formatH(hourMs)}</span>
             </div>
           );
         })}
 
         {programs.map((program) => {
           const start = (program.startAt - fromMs) / (60 * 1000);
-          const end = (program.startAt + program.duration - fromMs) /
-            (60 * 1000);
-          const serviceIndex = services.findIndex((service) =>
-            service.serviceId === program.serviceId
+          const end = (program.startAt + program.duration - fromMs) / (60 * 1000);
+          const serviceIndex = services.findIndex(
+            (service) => service.serviceId === program.serviceId,
           );
           if (serviceIndex < 0) {
             return null;
@@ -202,10 +195,7 @@ export default function ProgramTable(props: Props) {
               }}
             >
               <div className={styles.programContent}>
-                <ProgramItem
-                  program={program}
-                  state={schedule?.state}
-                />
+                <ProgramItem program={program} state={schedule?.state} />
               </div>
             </div>
           );

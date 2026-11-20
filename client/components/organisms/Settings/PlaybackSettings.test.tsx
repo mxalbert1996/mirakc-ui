@@ -7,10 +7,7 @@ import { t } from "../../../locales/i18n.ts";
 const label = t("settings.playback.hevc.label");
 
 function stubHevcSupport(supported: boolean) {
-  vi.stubGlobal(
-    "MediaSource",
-    supported ? { isTypeSupported: () => true } : undefined,
-  );
+  vi.stubGlobal("MediaSource", supported ? { isTypeSupported: () => true } : undefined);
 }
 
 beforeEach(() => {
@@ -29,8 +26,7 @@ describe("PlaybackSettings", () => {
     const sw = screen.getByRole("switch", { name: label });
     expect(sw.getAttribute("aria-checked")).toBe("true");
     expect(localStorage.getItem(HEVC_STORAGE_KEY)).toBeNull();
-    expect(screen.getByText(t("settings.playback.hevc.description")))
-      .toBeTruthy();
+    expect(screen.getByText(t("settings.playback.hevc.description"))).toBeTruthy();
   });
 
   it("オフにすると保存し、再度オンにすると保存値を消す", () => {
@@ -51,9 +47,7 @@ describe("PlaybackSettings", () => {
 
     render(<PlaybackSettings />);
 
-    expect(
-      screen.getByRole("switch", { name: label }).getAttribute("aria-checked"),
-    ).toBe("false");
+    expect(screen.getByRole("switch", { name: label }).getAttribute("aria-checked")).toBe("false");
   });
 
   it("非対応ブラウザでは無効化し、非対応の案内を出す", () => {
@@ -64,10 +58,8 @@ describe("PlaybackSettings", () => {
     const sw = screen.getByRole("switch", { name: label }) as HTMLButtonElement;
     expect(sw.disabled).toBe(true);
     expect(sw.getAttribute("aria-checked")).toBe("false");
-    expect(screen.getByText(t("settings.playback.hevc.unsupported")))
-      .toBeTruthy();
-    expect(screen.queryByText(t("settings.playback.hevc.description")))
-      .toBeNull();
+    expect(screen.getByText(t("settings.playback.hevc.unsupported"))).toBeTruthy();
+    expect(screen.queryByText(t("settings.playback.hevc.description"))).toBeNull();
   });
 
   it("非対応ブラウザでは既定のオン状態でもオフ表示にする", () => {
@@ -75,8 +67,6 @@ describe("PlaybackSettings", () => {
 
     render(<PlaybackSettings />);
 
-    expect(
-      screen.getByRole("switch", { name: label }).getAttribute("aria-checked"),
-    ).toBe("false");
+    expect(screen.getByRole("switch", { name: label }).getAttribute("aria-checked")).toBe("false");
   });
 });

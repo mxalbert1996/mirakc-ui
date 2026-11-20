@@ -1,20 +1,20 @@
 # Docker (本番)
 
-マルチステージビルド。linux/amd64, linux/arm64 対応。GitHub Actions で GHCR に自動パブリッシュ。
+マルチステージビルド。linux/amd64, linux/arm64 対応。GHCR への publish は手動 workflow_dispatch（`publish-docker.yml`）。main push では `docker-smoke.yml` がビルドと起動 smoke を検証する。
 
 ## ステージ構成
 
-1. `mirakc-ui-build` — Deno イメージで `deno install` + `deno task build` を実行し `client/dist`（Vite ビルド成果物）を生成。
-2. `tsreadex-build` — Debian bookworm-slim。[tsreadex](https://github.com/xtne6f/tsreadex)（`master-240517`）をソースビルドしてバイナリ化。
-3. 最終ステージ — Deno イメージに `ffmpeg` を apt で追加し、`tsreadex` バイナリ・`client/dist`・`server/` をコピー。`deno serve server/main.ts`（Hono）で起動し、`client/dist` を `serveStatic` で配信しつつ `/api`（mirakc プロキシ / transcode）を提供する。`server/routes/transcode.ts` から `ffmpeg` / `tsreadex` を spawn する。
-
-> 旧構成は Fresh の `_fresh/server.js` を `deno serve` していた。本番起動は Hono の `server/main.ts` に置き換わった。
+1. `mirakc-ui-build` — Node イメージで `pnpm install` + `pnpm build` を実行し `client/dist`（Vite ビルド成果物）を生成。クライアントはアーキ非依存の JS のため `--platform=$BUILDPLATFORM`。
+2. `mirakc-ui-go-build` — Go イメージでサーバをクロスコンパイル（`CGO_ENABLED=0`、`$TARGETOS/$TARGETARCH` 向け）。`client/dist` は `go:embed` でバイナリに取り込む。
+3. `tsreadex-build` — Debian trixie-slim。[tsreadex](https://github.com/xtne6f/tsreadex)（`master-240517`）をソースビルドしてバイナリ化。
+4. `ffmpeg-build` — Debian trixie-slim。必要なコーデック・フィルタだけを有効化した ffmpeg をソースビルド。
+5. 最終ステージ — Debian trixie-slim + tini。`mirakc-ui` Go バイナリ・`ffmpeg`・`tsreadex` を配置し、uid 900 の専用ユーザで起動する。Deno ランタイムは存在しない（ビルド時のみ Node を使用）。
 
 ## タイムゾーン
 
-最終ステージは `TZ` をハードコードしない（中立。地域に依存させない方針）。Deno イメージの既定はシステム TZ で、コンテナでは **UTC** になる。`TZ` 未設定だと録画通知・録画ファイル名が UTC で出る（`server/main.ts` が `Temporal.Now.timeZoneId()` で解決して整形に注入する。[env.md](./env.md) の `TZ` を参照）。UI の日時表示はブラウザのローカル TZ に従うため `TZ` の影響を受けない。
+最終ステージは `TZ` をハードコードしない（中立。地域に依存させない方針）。コンテナでは **UTC** になる。`TZ` 未設定だと録画通知・録画ファイル名が UTC で出る（Go サーバが `time.LoadLocation` で解決して整形に注入する。[env.md](./env.md) の `TZ` を参照）。UI の日時表示はブラウザのローカル TZ に従うため `TZ` の影響を受けない。
 
-本番コンテナでは `TZ` を環境変数として渡す（compose の `environment:` か `docker run -e TZ=Asia/Tokyo ...`）。Deno（V8/ICU）はゾーン情報を内蔵するため、`Asia/Tokyo` 等の解決に追加の `tzdata` インストールは要らない。
+本番コンテナでは `TZ` を環境変数として渡す（compose の `environment:` か `docker run -e TZ=Asia/Tokyo ...`）。Go バイナリが `time/tzdata` を埋め込むため、`Asia/Tokyo` 等の解決に追加の `tzdata` インストールは要らない。
 
 ## `$BUILDPLATFORM` の使い分け
 

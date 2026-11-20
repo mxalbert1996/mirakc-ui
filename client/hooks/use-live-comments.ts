@@ -1,8 +1,5 @@
 import { useEffect, useState } from "react";
-import type {
-  CommentSourceId,
-  SourceComment,
-} from "../../server/lib/comments/types.ts";
+import type { CommentSourceId, SourceComment } from "../lib/shared/comment-types.ts";
 import type { LiveComment } from "../lib/live-comment.ts";
 import { formatHm } from "../lib/datetime.ts";
 import { fetchStreamTicket, withTicketParam } from "../lib/api/tickets.ts";
@@ -85,13 +82,9 @@ export function useLiveComments(
       if (cancelled) {
         return;
       }
-      const url = withTicketParam(
-        `/api/comments/services/${serviceId}/stream`,
-        ticket,
-      );
-      const source = createEventSource !== undefined
-        ? createEventSource(url)
-        : new EventSource(url);
+      const url = withTicketParam(`/api/comments/services/${serviceId}/stream`, ticket);
+      const source =
+        createEventSource !== undefined ? createEventSource(url) : new EventSource(url);
       opened = source;
 
       const onSources = (event: MessageEvent) => {
@@ -113,9 +106,7 @@ export function useLiveComments(
       const onComment = (event: MessageEvent) => {
         try {
           const comment: SourceComment = JSON.parse(event.data);
-          setComments((prev) =>
-            [...prev, toLiveComment(comment)].slice(-limit)
-          );
+          setComments((prev) => [...prev, toLiveComment(comment)].slice(-limit));
         } catch {
           // 不正なイベントは無視
         }

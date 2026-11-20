@@ -61,7 +61,8 @@ function ProgramSearchModalRoute() {
         navigate({
           search: (prev) => ({ ...prev, q: value || undefined }),
           replace: true,
-        })}
+        })
+      }
       filter={filter ?? "all"}
       onFilterChange={(next) =>
         navigate({
@@ -70,7 +71,8 @@ function ProgramSearchModalRoute() {
             filter: next === "all" ? undefined : next,
           }),
           replace: true,
-        })}
+        })
+      }
       programs={programs.data ?? []}
       services={services.data ?? []}
       schedules={recordingSchedules.data ?? []}

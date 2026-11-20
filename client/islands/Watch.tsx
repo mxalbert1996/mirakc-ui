@@ -13,7 +13,7 @@ import LoadingTemplate from "../components/templates/Loading.tsx";
 import WatchTemplate from "../components/templates/Watch.tsx";
 import type { ChannelEntry } from "../components/organisms/Watch/SelectTab.tsx";
 import type { TabId } from "../components/organisms/Watch/TabPanel.tsx";
-import type { Quality } from "../../server/lib/quality.ts";
+import type { Quality } from "../lib/shared/quality.ts";
 
 type Service = components["schemas"]["MirakurunService"];
 type Program = components["schemas"]["MirakurunProgram"];
@@ -46,17 +46,14 @@ type Props = {
  * 取得できていない) ものは「番組なし」として扱い undefined を返す。EPG の
  * Table が `!program.name` を落とすのと同じ基準。
  */
-function findAiring(
-  programs: Program[],
-  service: Service,
-  now: number,
-): Program | undefined {
-  return programs.find((program) =>
-    !!program.name &&
-    program.networkId === service.networkId &&
-    program.serviceId === service.serviceId &&
-    program.startAt <= now &&
-    now < program.startAt + program.duration
+function findAiring(programs: Program[], service: Service, now: number): Program | undefined {
+  return programs.find(
+    (program) =>
+      !!program.name &&
+      program.networkId === service.networkId &&
+      program.serviceId === service.serviceId &&
+      program.startAt <= now &&
+      now < program.startAt + program.duration,
   );
 }
 
@@ -71,11 +68,12 @@ function findNext(
   }
   const after = current.startAt + current.duration;
   return programs
-    .filter((program) =>
-      !!program.name &&
-      program.networkId === service.networkId &&
-      program.serviceId === service.serviceId &&
-      program.startAt >= after
+    .filter(
+      (program) =>
+        !!program.name &&
+        program.networkId === service.networkId &&
+        program.serviceId === service.serviceId &&
+        program.startAt >= after,
     )
     .sort((a, b) => a.startAt - b.startAt)[0];
 }
@@ -103,9 +101,10 @@ export default function Watch(props: Props) {
   const allServices = sortServices(services.data ?? []);
   const allPrograms = programs.data ?? [];
 
-  const selectedService = props.serviceId !== undefined
-    ? allServices.find((service) => service.id === props.serviceId)
-    : undefined;
+  const selectedService =
+    props.serviceId !== undefined
+      ? allServices.find((service) => service.id === props.serviceId)
+      : undefined;
 
   // 視聴中サービスの channel type に追従する (チャンネル切替時)。
   useEffect(() => {
@@ -145,12 +144,11 @@ export default function Watch(props: Props) {
   // (サーバ側で必ず probe し、失敗すれば H.264 へ落ちる)。
   const streamUrl = selectedService
     ? `/api/transcode/services/${selectedService.id}?audioTrack=${props.audioTrackIndex}&quality=${props.quality}${
-      shouldRequestHevc() ? "&codec=hevc" : ""
-    }`
+        shouldRequestHevc() ? "&codec=hevc" : ""
+      }`
     : undefined;
 
-  const audios = airingFull?.audios ??
-    (airingFull?.audio ? [airingFull.audio] : []);
+  const audios = airingFull?.audios ?? (airingFull?.audio ? [airingFull.audio] : []);
 
   const channels: ChannelEntry[] = allServices
     .filter((service) => service.channel.type === channelType)

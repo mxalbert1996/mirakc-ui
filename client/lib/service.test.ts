@@ -12,11 +12,7 @@ type Service = components["schemas"]["MirakurunService"];
 type Channel = components["schemas"]["MirakurunChannel"];
 type ChannelType = components["schemas"]["ChannelType"];
 
-function serviceWith(
-  type: ChannelType,
-  serviceId: number,
-  remoteControlKeyId?: number,
-): Service {
+function serviceWith(type: ChannelType, serviceId: number, remoteControlKeyId?: number): Service {
   return {
     id: serviceId,
     name: "テスト",
@@ -56,10 +52,7 @@ describe("sortServices", () => {
   });
 
   it("GR は serviceId よりリモコン番号を優先する", () => {
-    const sorted = sortServices([
-      serviceWith("GR", 1048, 6),
-      serviceWith("GR", 1064, 5),
-    ]);
+    const sorted = sortServices([serviceWith("GR", 1048, 6), serviceWith("GR", 1064, 5)]);
     expect(sorted.map((s) => s.serviceId)).toEqual([1064, 1048]);
   });
 });
@@ -79,20 +72,13 @@ describe("sortChannelGroups", () => {
   });
 
   it("サービスを持たない group は末尾へ回す", () => {
-    const sorted = sortChannelGroups([
-      group("z", []),
-      group("a", [serviceWith("GR", 1024, 1)]),
-    ]);
+    const sorted = sortChannelGroups([group("z", []), group("a", [serviceWith("GR", 1024, 1)])]);
     expect(sorted.map((g) => g.id)).toEqual(["a", "z"]);
   });
 });
 
 describe("buildChannelGroups", () => {
-  function channelOf(
-    channel: string,
-    type: ChannelType,
-    services: Service[],
-  ): Channel {
+  function channelOf(channel: string, type: ChannelType, services: Service[]): Channel {
     return {
       channel,
       name: channel,
@@ -110,10 +96,7 @@ describe("buildChannelGroups", () => {
     const groups = buildChannelGroups(
       [
         channelOf("24", "GR", [serviceWith("GR", 1048, 5)]),
-        channelOf("multi", "GR", [
-          serviceWith("GR", 1064, 8),
-          serviceWith("GR", 1056, 6),
-        ]),
+        channelOf("multi", "GR", [serviceWith("GR", 1064, 8), serviceWith("GR", 1056, 6)]),
         channelOf("27", "GR", [serviceWith("GR", 1024, 1)]),
       ],
       [

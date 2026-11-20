@@ -4,7 +4,7 @@ import {
   isValidDiscordWebhookUrl,
   isValidNtfyUrl,
   NOTIFICATION_EVENT_KEYS,
-} from "../../../server/lib/notification-settings.ts";
+} from "../../lib/shared/notification-settings.ts";
 import type {
   NotificationSettings,
   NotificationSettingsInput,
@@ -85,20 +85,21 @@ export default function Notification(props: Props) {
       // 明示的な null (削除)、どちらでもなければ省略 (保持) を送る (§6.2)。
       const token = value.token.trim();
       const discordWebhookUrl = value.discordWebhookUrl.trim();
-      props.onSave({
-        url: value.url.trim(),
-        onSchedule: value.onSchedule,
-        onStart: value.onStart,
-        onEnd: value.onEnd,
-        onFail: value.onFail,
-        onRemove: value.onRemove,
-        ...(token !== "" ? { token } : tokenClear ? { token: null } : {}),
-        ...(discordWebhookUrl !== ""
-          ? { discordWebhookUrl }
-          : discordClear
-          ? { discordWebhookUrl: null }
-          : {}),
-      })
+      props
+        .onSave({
+          url: value.url.trim(),
+          onSchedule: value.onSchedule,
+          onStart: value.onStart,
+          onEnd: value.onEnd,
+          onFail: value.onFail,
+          onRemove: value.onRemove,
+          ...(token !== "" ? { token } : tokenClear ? { token: null } : {}),
+          ...(discordWebhookUrl !== ""
+            ? { discordWebhookUrl }
+            : discordClear
+              ? { discordWebhookUrl: null }
+              : {}),
+        })
         .then(() => {
           // 保存に成功したら draft とクリア予定を未変更状態に戻す。シークレット
           // は保存済み値を受け取れないため、空 (= 未変更) へのリセットが相当。
@@ -156,39 +157,36 @@ export default function Notification(props: Props) {
             {(values) => {
               const url = values.url.trim();
               const discordUrl = values.discordWebhookUrl.trim();
-              const anyEvent = NOTIFICATION_EVENT_KEYS.some((key) =>
-                values[key]
-              );
+              const anyEvent = NOTIFICATION_EVENT_KEYS.some((key) => values[key]);
               const ntfyInvalid = url !== "" && !isValidNtfyUrl(url);
-              const discordInvalid = discordUrl !== "" &&
-                !isValidDiscordWebhookUrl(discordUrl);
+              const discordInvalid = discordUrl !== "" && !isValidDiscordWebhookUrl(discordUrl);
               // イベント有効なのに送信できる通知先 (ntfy / Discord) が 1 つも無い。
               // Discord の Webhook はシークレットで draft が空でも、保存済み
               // (discordWebhookUrlSet) かつクリア予定でなければ送信先として数える。
-              const noDestination = anyEvent && url === "" &&
+              const noDestination =
+                anyEvent &&
+                url === "" &&
                 discordUrl === "" &&
                 (!props.settings.discordWebhookUrlSet || discordClear);
               // シークレットは保存済み値が draft に入らないため、入力が非空なら
               // 変更扱いとする (空に戻せば元の値の保持で変更なし)。クリア予定も
               // 保存すべき変更なので dirty に含める。
-              const dirty = values.url !== props.settings.url ||
+              const dirty =
+                values.url !== props.settings.url ||
                 values.token.trim() !== "" ||
                 values.discordWebhookUrl.trim() !== "" ||
-                tokenClear || discordClear ||
-                NOTIFICATION_EVENT_KEYS.some((key) =>
-                  values[key] !== props.settings[key]
-                );
+                tokenClear ||
+                discordClear ||
+                NOTIFICATION_EVENT_KEYS.some((key) => values[key] !== props.settings[key]);
               // 「通知先ゼロ」は ntfy カードに 1 回だけ出す (文言で両対応を明示)。
               const ntfyError = !dirty
                 ? undefined
                 : ntfyInvalid
-                ? "invalid" as const
-                : noDestination
-                ? "required" as const
-                : undefined;
-              const discordError = !dirty || !discordInvalid
-                ? undefined
-                : "invalid" as const;
+                  ? ("invalid" as const)
+                  : noDestination
+                    ? ("required" as const)
+                    : undefined;
+              const discordError = !dirty || !discordInvalid ? undefined : ("invalid" as const);
 
               return (
                 <>
@@ -214,10 +212,13 @@ export default function Notification(props: Props) {
                       setTokenClear(!tokenClear);
                     }}
                     onTest={() =>
-                      runTest(props.onTestNtfy({
-                        url: values.url.trim(),
-                        token: values.token.trim(),
-                      }))}
+                      runTest(
+                        props.onTestNtfy({
+                          url: values.url.trim(),
+                          token: values.token.trim(),
+                        }),
+                      )
+                    }
                   />
 
                   <DiscordCard
@@ -225,8 +226,7 @@ export default function Notification(props: Props) {
                     webhookUrlSet={props.settings.discordWebhookUrlSet}
                     webhookUrlClearPending={discordClear}
                     urlError={discordError}
-                    testEnabled={isValidDiscordWebhookUrl(discordUrl) &&
-                      !discordClear}
+                    testEnabled={isValidDiscordWebhookUrl(discordUrl) && !discordClear}
                     testing={props.testing}
                     onChangeWebhookUrl={(value) => {
                       // 入力すればクリア予定を解除し、置き換えとして保存する。
@@ -241,9 +241,12 @@ export default function Notification(props: Props) {
                       setDiscordClear(!discordClear);
                     }}
                     onTest={() =>
-                      runTest(props.onTestDiscord({
-                        webhookUrl: values.discordWebhookUrl.trim(),
-                      }))}
+                      runTest(
+                        props.onTestDiscord({
+                          webhookUrl: values.discordWebhookUrl.trim(),
+                        }),
+                      )
+                    }
                   />
 
                   <EventToggles
@@ -265,11 +268,7 @@ export default function Notification(props: Props) {
       </main>
 
       {toast !== null && (
-        <Toast
-          message={toast.message}
-          variant={toast.variant}
-          leaving={toast.leaving}
-        />
+        <Toast message={toast.message} variant={toast.variant} leaving={toast.leaving} />
       )}
     </div>
   );

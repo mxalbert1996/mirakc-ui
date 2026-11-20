@@ -53,8 +53,7 @@ function KeywordRulesPage() {
     [channels.data, services.data],
   );
 
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: ["keyword-rules"] });
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["keyword-rules"] });
 
   // 有効/停止トグル (全項目上書きの PUT)。
   const toggle = useMutation({
@@ -72,10 +71,7 @@ function KeywordRulesPage() {
     onSuccess: invalidate,
   });
 
-  if (
-    rules.isPending || services.isPending || channels.isPending ||
-    programs.isPending
-  ) {
+  if (rules.isPending || services.isPending || channels.isPending || programs.isPending) {
     return <LoadingTemplate label={t("keyword.loading")} />;
   }
 
@@ -92,7 +88,8 @@ function KeywordRulesPage() {
         navigate({
           to: "/settings/keywords/$ruleId",
           params: { ruleId: rule.id },
-        })}
+        })
+      }
       onToggle={(rule) => toggle.mutate(rule)}
       onRemove={(rule) => remove.mutate(rule)}
       onBackToSettings={() => navigate({ to: "/settings" })}

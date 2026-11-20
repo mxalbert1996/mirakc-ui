@@ -1,6 +1,6 @@
 import { createFileRoute, useLocation } from "@tanstack/react-router";
 import { useEffect } from "react";
-import { normalizeQuality, type Quality } from "../../../server/lib/quality.ts";
+import { normalizeQuality, type Quality } from "../../lib/shared/quality.ts";
 import { defaultWatchSearch } from "../../lib/watch-search.ts";
 import { t } from "../../locales/i18n.ts";
 import Watch from "../../islands/Watch.tsx";
@@ -50,13 +50,13 @@ function WatchServicePage() {
           params: { serviceId: String(service.id) },
           search: defaultWatchSearch,
           state: { selected: true },
-        })}
+        })
+      }
       onAudioTrackChange={(index) =>
-        navigate({ search: (prev) => ({ ...prev, audioTrack: index }) })}
-      onQualityChange={(q) =>
-        navigate({ search: (prev) => ({ ...prev, quality: q }) })}
-      onCaptionToggle={() =>
-        navigate({ search: (prev) => ({ ...prev, caption: !prev.caption }) })}
+        navigate({ search: (prev) => ({ ...prev, audioTrack: index }) })
+      }
+      onQualityChange={(q) => navigate({ search: (prev) => ({ ...prev, quality: q }) })}
+      onCaptionToggle={() => navigate({ search: (prev) => ({ ...prev, caption: !prev.caption }) })}
     />
   );
 }

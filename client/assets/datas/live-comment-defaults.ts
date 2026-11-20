@@ -15,7 +15,7 @@
  *
  * 地域を増やすときは LIVE_COMMENT_DEFAULT_REGIONS に要素を足す。
  */
-import type { LiveCommentSourceId } from "../../../server/lib/live-comment-settings.ts";
+import type { LiveCommentSourceId } from "../../lib/shared/live-comment-settings.ts";
 
 /** デフォルトの 1 チャンネル分の割り当て(id / createdAt を持たない入力相当)。 */
 export type LiveCommentDefaultMapping = {
@@ -36,11 +36,7 @@ export type LiveCommentDefaultRegion = {
 };
 
 /** 1 チャンネルに nicolive + nx-jikkyo を割り当てるヘルパ。 */
-function both(
-  channel: string,
-  nicolive: string,
-  nxJikkyo: string,
-): LiveCommentDefaultMapping {
+function both(channel: string, nicolive: string, nxJikkyo: string): LiveCommentDefaultMapping {
   return {
     channel,
     assignments: [

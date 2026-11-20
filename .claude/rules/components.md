@@ -17,7 +17,7 @@
 - `client/components/` 配下のすべてのコンポーネントに co-located な `*.stories.tsx` を用意する。
 - 最低 1 つの代表 story を持たせ、props のバリエーション（状態違い・空状態・エラー等）も story 化する。
 - 共有モックは `client/lib/fixtures.ts`、router を要する story は `client/lib/storybook.tsx` の decorator を使う。
-- `deno task storybook:build` が通ることを確認する。
+- `pnpm storybook:build` が通ることを確認する。
 
 ## 3. 全コンポーネントにユニットテストを用意する
 
@@ -34,7 +34,7 @@
   - 時刻（`new Date()` / `Date.now()`）— 「現在時刻」は props で受け取り、テストで固定できるようにする。
   - 画面幅・メディアクエリ判定、`fetch` やストリーム供給（実況コメント等）。
   - ルーティング（`Link` 等）や翻訳（`t`）に強く依存する場合は、テスト時に差し替え可能にする。
-- これにより、テストは外部モジュール（特に esm.sh の `mpegts.js` 等）を読み込まずに済み、`deno test` 単体で完結する。
+- これにより、テストは外部モジュール（特に `mpegts.js` 等）を読み込まずに済む（vitest.config.ts の alias がローカルスタブへ向ける）。
 - データ取得（API 呼び出し）はコンポーネントに持たせず、route 側で行って props で渡す（既存方針を踏襲）。
 
 ## 5. テストファイルは `*.test.ts` で統一する
@@ -43,9 +43,8 @@
   - JSX を使うツリー描画は `.test.tsx` で素直に書く（`.ts` は JSX を解釈しないため）。
   - JSX を伴わない純ロジック（`client/lib/` 等）のテストは `.test.ts` にする。
 - ランナーは用途で分ける:
-  - **client（React コンポーネント）**: Vitest を `deno run -A npm:vitest`（`deno task test:client`）で実行する。`.module.css` / `?raw` / `.svg?react` / esm.sh の URL import を Vite の変換パイプラインが解決するため、素の `deno test` ではなく Vitest を用いる。DOM は happy-dom、描画は `@testing-library/react`、後片付けは `client/lib/test-setup.ts` の `afterEach(cleanup)` で行う。
-  - **server（ロジック）**: 従来どおり `deno test`（`deno task test:server`）で実行する。
-- `deno task test` は server → client の順で両方を走らせる。カバレッジは `deno task test:client:coverage`。
+  - **client（React コンポーネント）**: `pnpm test` で Vitest を実行する。`.module.css` / `?raw` / `.svg?react` を Vite の変換パイプラインが解決するため、素の Node テストランナーではなく Vitest を用いる。DOM は happy-dom、描画は `@testing-library/react`、後片付けは `client/lib/test-setup.ts` の `afterEach(cleanup)` で行う。カバレッジは `--coverage` 付きで `coverage/client` に出る。
+  - **server-go（ロジック）**: `go test -race ./...`（`server-go/` 内）で実行する。
 - JSX 変換は Vitest 既定のトランスフォーマ（oxc）の automatic runtime に任せる（`@vitejs/plugin-react` は Vite のバージョン不整合で使えないため付けない）。
 
 ## 6. SVG はインラインで書かずファイルに外出しする

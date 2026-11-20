@@ -48,7 +48,7 @@ non-AVE の呼び出しは従来どおり `-1, 1` で、poll の意味は変え�
 だけをフィルタに通すので、それ以外のパケットはデバイスの出力のまま。
 AVE の受信ループと non-AVE の legacy ループの両方から呼ぶ。
 
-このパッチが入った ffmpeg を前提に、`server/lib/encoder.ts` は
+このパッチが入った ffmpeg を前提に、`server-go/internal/transcode` は
 `-bsf:v` を渡さず (渡すと入力の SAR を上書きしてしまう)、HW の拡縮も固定格子
 ではなく `scale=-2:<height>` にしている。1080p では 1920x1080 のソースも
 縮小されず、その 1:1 の SAR のまま出る。

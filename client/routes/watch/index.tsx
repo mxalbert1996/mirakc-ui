@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
-import { defaultQuality } from "../../../server/lib/quality.ts";
+import { defaultQuality } from "../../lib/shared/quality.ts";
 import { defaultWatchSearch } from "../../lib/watch-search.ts";
 import { t } from "../../locales/i18n.ts";
 import Watch from "../../islands/Watch.tsx";
@@ -31,7 +31,8 @@ function WatchIndexPage() {
           params: { serviceId: String(service.id) },
           search: defaultWatchSearch,
           state: { selected: true },
-        })}
+        })
+      }
       onAudioTrackChange={() => {}}
       onQualityChange={() => {}}
       onCaptionToggle={() => {}}

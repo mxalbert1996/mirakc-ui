@@ -1,4 +1,4 @@
-import { defaultQuality } from "../../server/lib/quality.ts";
+import { defaultQuality } from "./shared/quality.ts";
 
 /**
  * /watch/$serviceId へ遷移する際の search param の既定値。

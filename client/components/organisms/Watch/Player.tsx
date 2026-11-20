@@ -8,17 +8,14 @@ import type {
 import type { components } from "../../../lib/api/schema.d.ts";
 import { genreOf, genreVars } from "../../../lib/genre.ts";
 import type { LiveComment } from "../../../lib/live-comment.ts";
-import type { CommentSourceId } from "../../../../server/lib/comments/types.ts";
+import type { CommentSourceId } from "../../../lib/shared/comment-types.ts";
 import { t } from "../../../locales/i18n.ts";
-import {
-  fetchStreamTicket,
-  withTicketParam,
-} from "../../../lib/api/tickets.ts";
+import { fetchStreamTicket, withTicketParam } from "../../../lib/api/tickets.ts";
 import Icon from "../../atoms/Icon.tsx";
 import ChannelBadge from "../../atoms/ChannelBadge.tsx";
 import CommentFeed from "./CommentFeed.tsx";
 import styles from "./Player.module.css";
-import { qualities, type Quality } from "../../../../server/lib/quality.ts";
+import { qualities, type Quality } from "../../../lib/shared/quality.ts";
 
 /**
  * MirakurunProgram.audios の各エントリ。ARIB の音声トラック情報。
@@ -77,7 +74,7 @@ type Props = {
   sources?: CommentSourceId[];
 
   /**
-   * mpegts.js モジュールのローダー。既定は esm.sh からの動的 import。
+   * mpegts.js モジュールのローダー。既定は npm 依存 (バンドル済み) からの動的 import。
    * テスト時はフェイクに差し替えて、外部ストリームライブラリの読み込みを断つ。
    */
   loadMpegts?: () => Promise<typeof import("mpegts.js")>;
@@ -132,9 +129,9 @@ export default function WatchPlayer(props: Props) {
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const captionContainerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<MpegtsPlayer | null>(null);
-  const aribb24Ref = useRef<
-    { controller: Aribb24Controller; renderer: Aribb24Renderer } | null
-  >(null);
+  const aribb24Ref = useRef<{ controller: Aribb24Controller; renderer: Aribb24Renderer } | null>(
+    null,
+  );
   const [error, setError] = useState<PlayerError | undefined>(undefined);
   // 受信中 (チューニング / バッファリング) 中は true。streamUrl セット時に true、
   // <video> の playing で false、waiting で再度 true。実際の再生状態に追従する。
@@ -152,9 +149,7 @@ export default function WatchPlayer(props: Props) {
   const [commentsOpen, setCommentsOpen] = useState(false);
   // controls の表示状態。マウス移動 / タップで表示し、操作が止まると自動で隠す。
   const [controlsVisible, setControlsVisible] = useState(false);
-  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // 音声 / 画質のポップメニュー。
   const [menu, setMenu] = useState<"audio" | "quality" | null>(null);
   // ポップメニューが開いている間はアイドル自動非表示を止める。
@@ -193,9 +188,7 @@ export default function WatchPlayer(props: Props) {
   // fullscreenchange を listen して state 同期
   useEffect(() => {
     const onChange = () => {
-      setIsFullscreen(
-        document.fullscreenElement === playerContainerRef.current,
-      );
+      setIsFullscreen(document.fullscreenElement === playerContainerRef.current);
     };
     document.addEventListener("fullscreenchange", onChange);
     return () => {
@@ -278,10 +271,7 @@ export default function WatchPlayer(props: Props) {
     const loadAribb24 = props.loadAribb24 ?? (() => import("aribb24.js"));
 
     const init = async () => {
-      const [mpegtsModule, aribb24Module] = await Promise.all([
-        loadMpegts(),
-        loadAribb24(),
-      ]);
+      const [mpegtsModule, aribb24Module] = await Promise.all([loadMpegts(), loadAribb24()]);
 
       if (destroyed) {
         return;
@@ -318,35 +308,28 @@ export default function WatchPlayer(props: Props) {
         },
       ) as unknown as MpegtsPlayer;
 
-      const mpegtsEvents =
-        (mpegts as unknown as { Events: Record<string, string> })
-          .Events;
+      const mpegtsEvents = (mpegts as unknown as { Events: Record<string, string> }).Events;
 
-      player.on(
-        mpegtsEvents.ERROR,
-        (errorType: unknown, errorDetail: unknown) => {
-          if (!destroyed) {
-            const detail = [errorType, errorDetail]
-              .filter((v): v is string => typeof v === "string" && v.length > 0)
-              .join(" / ");
-            setError({
-              title: t("watch.error.title"),
-              description: t("watch.error.description"),
-              code: detail ? t("watch.error.code", { detail }) : undefined,
-              retryable: true,
-            });
-            setBuffering(false);
-          }
-        },
-      );
+      player.on(mpegtsEvents.ERROR, (errorType: unknown, errorDetail: unknown) => {
+        if (!destroyed) {
+          const detail = [errorType, errorDetail]
+            .filter((v): v is string => typeof v === "string" && v.length > 0)
+            .join(" / ");
+          setError({
+            title: t("watch.error.title"),
+            description: t("watch.error.description"),
+            code: detail ? t("watch.error.code", { detail }) : undefined,
+            retryable: true,
+          });
+          setBuffering(false);
+        }
+      });
 
       // aribb24.js 字幕コントローラー初期化
-      const { Controller, MPEGTSFeeder, CanvasMainThreadRenderer } =
-        aribb24Module;
+      const { Controller, MPEGTSFeeder, CanvasMainThreadRenderer } = aribb24Module;
       const controller = new Controller() as unknown as Aribb24Controller;
       const feeder = new MPEGTSFeeder();
-      const renderer =
-        new CanvasMainThreadRenderer() as unknown as Aribb24Renderer;
+      const renderer = new CanvasMainThreadRenderer() as unknown as Aribb24Renderer;
 
       controller.attachFeeder(feeder);
       controller.attachRenderer(renderer);
@@ -367,37 +350,35 @@ export default function WatchPlayer(props: Props) {
 
       player.on(mpegtsEvents.PES_PRIVATE_DATA_ARRIVED, (data: unknown) => {
         const d = data as PesData;
-        (feeder as unknown as {
-          feedB24: (buf: ArrayBuffer, pts: number, dts: number) => void;
-        }).feedB24(
+        (
+          feeder as unknown as {
+            feedB24: (buf: ArrayBuffer, pts: number, dts: number) => void;
+          }
+        ).feedB24(
           new Uint8Array(d.data).buffer,
-          ((d.pts ?? d.nearest_pts) ?? 0) / 1000,
-          ((d.dts ?? d.nearest_pts) ?? 0) / 1000,
+          (d.pts ?? d.nearest_pts ?? 0) / 1000,
+          (d.dts ?? d.nearest_pts ?? 0) / 1000,
         );
       });
 
-      player.on(
-        mpegtsEvents.TIMED_ID3_METADATA_ARRIVED,
-        (data: unknown) => {
-          const d = data as PesData;
-          (feeder as unknown as {
+      player.on(mpegtsEvents.TIMED_ID3_METADATA_ARRIVED, (data: unknown) => {
+        const d = data as PesData;
+        (
+          feeder as unknown as {
             feedID3: (buf: ArrayBuffer, pts: number, dts: number) => void;
-          }).feedID3(
-            new Uint8Array(d.data).buffer,
-            ((d.pts ?? d.nearest_pts) ?? 0) / 1000,
-            ((d.dts ?? d.nearest_pts) ?? 0) / 1000,
-          );
-        },
-      );
+          }
+        ).feedID3(
+          new Uint8Array(d.data).buffer,
+          (d.pts ?? d.nearest_pts ?? 0) / 1000,
+          (d.dts ?? d.nearest_pts ?? 0) / 1000,
+        );
+      });
 
       player.attachMediaElement(videoRef.current!);
       player.load();
 
       const playResult = player.play();
-      if (
-        playResult &&
-        typeof (playResult as Promise<void>).catch === "function"
-      ) {
+      if (playResult && typeof (playResult as Promise<void>).catch === "function") {
         (playResult as Promise<void>).catch(() => {
           // autoplay blocked — user interaction needed
         });
@@ -420,9 +401,7 @@ export default function WatchPlayer(props: Props) {
         try {
           aribb24Ref.current.controller.detachMedia();
           aribb24Ref.current.controller.detachFeeder();
-          aribb24Ref.current.controller.detachRenderer(
-            aribb24Ref.current.renderer,
-          );
+          aribb24Ref.current.controller.detachRenderer(aribb24Ref.current.renderer);
           aribb24Ref.current.renderer.destroy();
         } catch {
           // ignore cleanup errors
@@ -585,8 +564,8 @@ export default function WatchPlayer(props: Props) {
   const genre = props.program ? genreOf(props.program) : undefined;
   const stageBg = genre
     ? `radial-gradient(120% 120% at 50% 30%, color-mix(in oklab, ${
-      genreVars(genre.key).strong
-    } 42%, #05070b) 0%, #05070b 72%)`
+        genreVars(genre.key).strong
+      } 42%, #05070b) 0%, #05070b 72%)`
     : "#05070b";
 
   const audioLabel = (index: number): string => {
@@ -598,17 +577,13 @@ export default function WatchPlayer(props: Props) {
     const lang = a.langs.length > 0 ? ` (${a.langs.join("/")})` : "";
     return `${base}${lang}`;
   };
-  const audioOptions = props.audios.length > 0
-    ? props.audios.map((_, i) => i)
-    : [0];
+  const audioOptions = props.audios.length > 0 ? props.audios.map((_, i) => i) : [0];
 
   return (
     <div className={styles.container}>
       <div
         ref={playerContainerRef}
-        className={`${styles.player} ${
-          controlsVisible ? styles.controlsVisible : ""
-        }`}
+        className={`${styles.player} ${controlsVisible ? styles.controlsVisible : ""}`}
         data-controls-visible={controlsVisible}
         onPointerMove={revealControls}
         onPointerDown={handlePlayerPointerDown}
@@ -629,9 +604,7 @@ export default function WatchPlayer(props: Props) {
         {props.comments !== undefined && (
           <>
             <div
-              className={`${styles.comments} ${
-                commentsOpen ? styles.commentsOpen : ""
-              }`}
+              className={`${styles.comments} ${commentsOpen ? styles.commentsOpen : ""}`}
               aria-hidden={!commentsOpen}
             >
               <CommentFeed
@@ -646,9 +619,7 @@ export default function WatchPlayer(props: Props) {
                 commentsOpen ? styles.commentsToggleOpen : ""
               }`}
               onClick={() => setCommentsOpen((prev) => !prev)}
-              aria-label={commentsOpen
-                ? t("watch.live.overlayHide")
-                : t("watch.live.overlayShow")}
+              aria-label={commentsOpen ? t("watch.live.overlayHide") : t("watch.live.overlayShow")}
               title={t("watch.tab.live")}
             >
               <span className={styles.commentsToggleIcon}>
@@ -663,9 +634,7 @@ export default function WatchPlayer(props: Props) {
             <div className={styles.bufInner}>
               <div className={styles.bufSpinner} />
               <div className={styles.bufLabel}>
-                {props.service && (
-                  <ChannelBadge service={props.service} size="sm" />
-                )}
+                {props.service && <ChannelBadge service={props.service} size="sm" />}
                 {props.service
                   ? t("watch.buffering.receiving", { name: props.service.name })
                   : t("watch.buffering.receivingUnknown")}
@@ -686,18 +655,10 @@ export default function WatchPlayer(props: Props) {
                 <Icon size={32}>warning</Icon>
               </span>
               <h3 className={styles.errTitle}>{error.title}</h3>
-              {error.description && (
-                <p className={styles.errText}>{error.description}</p>
-              )}
-              {error.code && (
-                <span className={styles.errCode}>{error.code}</span>
-              )}
+              {error.description && <p className={styles.errText}>{error.description}</p>}
+              {error.code && <span className={styles.errCode}>{error.code}</span>}
               {error.retryable && (
-                <button
-                  type="button"
-                  className={styles.errRetry}
-                  onClick={handleRetry}
-                >
+                <button type="button" className={styles.errRetry} onClick={handleRetry}>
                   <Icon size={18}>refresh</Icon>
                   {t("watch.error.retry")}
                 </button>
@@ -713,13 +674,9 @@ export default function WatchPlayer(props: Props) {
                 type="button"
                 className={styles.cbtn}
                 onClick={handleToggleMute}
-                aria-label={muted
-                  ? t("watch.player.unmute")
-                  : t("watch.player.mute")}
+                aria-label={muted ? t("watch.player.unmute") : t("watch.player.mute")}
               >
-                <Icon size={22}>
-                  {sliderValue === 0 ? "volume_off" : "volume_up"}
-                </Icon>
+                <Icon size={22}>{sliderValue === 0 ? "volume_off" : "volume_up"}</Icon>
               </button>
               <input
                 type="range"
@@ -735,13 +692,9 @@ export default function WatchPlayer(props: Props) {
 
             <button
               type="button"
-              className={`${styles.cbtn} ${styles.cc} ${
-                props.captionVisible ? styles.ccOn : ""
-              }`}
+              className={`${styles.cbtn} ${styles.cc} ${props.captionVisible ? styles.ccOn : ""}`}
               onClick={props.onCaptionToggle}
-              aria-label={props.captionVisible
-                ? t("watch.caption.hide")
-                : t("watch.caption.show")}
+              aria-label={props.captionVisible ? t("watch.caption.hide") : t("watch.caption.show")}
               aria-pressed={props.captionVisible}
             >
               <Icon size={24}>closed_caption</Icon>
@@ -753,17 +706,13 @@ export default function WatchPlayer(props: Props) {
               <button
                 type="button"
                 className={`${styles.cbtn} ${styles.txt}`}
-                onClick={() =>
-                  menu === "audio" ? closeMenu() : openMenu("audio")}
+                onClick={() => (menu === "audio" ? closeMenu() : openMenu("audio"))}
                 aria-label={t("watch.audio.label")}
               >
                 {audioLabel(props.audioTrackIndex)}
               </button>
               {menu === "audio" && (
-                <div
-                  className={styles.popmenu}
-                  onMouseLeave={closeMenu}
-                >
+                <div className={styles.popmenu} onMouseLeave={closeMenu}>
                   <div className={styles.popHead}>{t("watch.audio.label")}</div>
                   {audioOptions.map((i) => (
                     <button
@@ -788,20 +737,14 @@ export default function WatchPlayer(props: Props) {
               <button
                 type="button"
                 className={`${styles.cbtn} ${styles.txt}`}
-                onClick={() =>
-                  menu === "quality" ? closeMenu() : openMenu("quality")}
+                onClick={() => (menu === "quality" ? closeMenu() : openMenu("quality"))}
                 aria-label={t("watch.quality.label")}
               >
                 {props.quality}
               </button>
               {menu === "quality" && (
-                <div
-                  className={styles.popmenu}
-                  onMouseLeave={closeMenu}
-                >
-                  <div className={styles.popHead}>
-                    {t("watch.quality.label")}
-                  </div>
+                <div className={styles.popmenu} onMouseLeave={closeMenu}>
+                  <div className={styles.popHead}>{t("watch.quality.label")}</div>
                   {qualities.map((q) => (
                     <button
                       key={q}
@@ -825,13 +768,11 @@ export default function WatchPlayer(props: Props) {
               type="button"
               className={styles.cbtn}
               onClick={handleToggleFullscreen}
-              aria-label={isFullscreen
-                ? t("watch.player.exitFullscreen")
-                : t("watch.player.fullscreen")}
+              aria-label={
+                isFullscreen ? t("watch.player.exitFullscreen") : t("watch.player.fullscreen")
+              }
             >
-              <Icon size={22}>
-                {isFullscreen ? "fullscreen_exit" : "fullscreen"}
-              </Icon>
+              <Icon size={22}>{isFullscreen ? "fullscreen_exit" : "fullscreen"}</Icon>
             </button>
           </div>
         </div>

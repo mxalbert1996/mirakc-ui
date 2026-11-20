@@ -32,6 +32,12 @@ import (
 const defaultPort = "8000"
 
 func main() {
+	// Dev parity with the old `deno serve --env-file=./.env` tasks: apply
+	// ./.env when present; real environment always wins.
+	if err := app.LoadDotEnv(".env"); err != nil {
+		slog.Default().Error("load .env failed", "error", err)
+	}
+
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(log)
 

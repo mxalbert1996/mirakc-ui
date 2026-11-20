@@ -1,9 +1,5 @@
 import { useState } from "react";
-import {
-  canPlayHevc,
-  isHevcPreferred,
-  setHevcPreferred,
-} from "../../../lib/hevc-preference.ts";
+import { canPlayHevc, isHevcPreferred, setHevcPreferred } from "../../../lib/hevc-preference.ts";
 import Icon from "../../atoms/Icon.tsx";
 import ToggleSwitch from "../../atoms/ToggleSwitch.tsx";
 import { t } from "../../../locales/i18n.ts";
@@ -35,26 +31,17 @@ export default function PlaybackSettings() {
             <Icon size={14}>high_quality</Icon>
           </span>
           <span className={styles.rowText}>
-            <span className={styles.rowName}>
-              {t("settings.playback.hevc.label")}
-            </span>
+            <span className={styles.rowName}>{t("settings.playback.hevc.label")}</span>
             <span
-              className={`${styles.rowDescription} ${
-                supported ? "" : styles.rowDescriptionMuted
-              }`}
+              className={`${styles.rowDescription} ${supported ? "" : styles.rowDescriptionMuted}`}
             >
               {supported
                 ? t("settings.playback.hevc.description")
                 : t("settings.playback.hevc.unsupported")}
             </span>
           </span>
-          <span
-            className={`${styles.state} ${enabled ? styles.stateOn : ""}`}
-            aria-hidden="true"
-          >
-            {enabled
-              ? t("settings.playback.hevc.on")
-              : t("settings.playback.hevc.off")}
+          <span className={`${styles.state} ${enabled ? styles.stateOn : ""}`} aria-hidden="true">
+            {enabled ? t("settings.playback.hevc.on") : t("settings.playback.hevc.off")}
           </span>
           <ToggleSwitch
             checked={enabled}

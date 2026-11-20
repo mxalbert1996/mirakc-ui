@@ -1,6 +1,6 @@
 # Transcode quality settings
 
-How the encoder arguments in `server/lib/encoder.ts` were chosen, and what they
+How the encoder arguments in `server-go/internal/transcode` were chosen, and what they
 cost. Measured 2026-11 on this machine (Apple AVE, FFmpeg 9.0.2 with the patches
 in `docker/ffmpeg-patches`).
 

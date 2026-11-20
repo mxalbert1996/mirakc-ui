@@ -1,10 +1,10 @@
 /**
  * キーワード自動録画の一致プレビュー・件数表示で使う「今後 7 日間の番組」
- * の組み立て。一致判定そのものは server/lib/keyword-rules.ts の
+ * の組み立て。一致判定そのものは client/lib/shared/keyword-rules.ts の
  * matchesKeywordRule (録画ジョブと同一ロジック) に委ねる。
  */
 import type { components } from "./api/schema.d.ts";
-import type { KeywordRuleTarget } from "../../server/lib/keyword-rules.ts";
+import type { KeywordRuleTarget } from "./shared/keyword-rules.ts";
 import { serviceOfProgram } from "./service.ts";
 
 type Program = components["schemas"]["MirakurunProgram"];
@@ -32,10 +32,11 @@ export function buildUpcoming(
 ): UpcomingProgram[] {
   const windowEnd = nowEpochMs + UPCOMING_WINDOW_DAYS * 24 * 60 * 60 * 1000;
   return programs
-    .filter((program) =>
-      Boolean(program.name) &&
-      program.startAt + program.duration > nowEpochMs &&
-      program.startAt < windowEnd
+    .filter(
+      (program) =>
+        Boolean(program.name) &&
+        program.startAt + program.duration > nowEpochMs &&
+        program.startAt < windowEnd,
     )
     .sort((a, b) => a.startAt - b.startAt || a.id - b.id)
     .map((program) => {

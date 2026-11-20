@@ -2,10 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { toLiveComment, useLiveComments } from "./use-live-comments.ts";
 import { formatHm } from "../lib/datetime.ts";
-import type {
-  CommentSourceId,
-  SourceComment,
-} from "../../server/lib/comments/types.ts";
+import type { CommentSourceId, SourceComment } from "../lib/shared/comment-types.ts";
 
 afterEach(() => {
   cleanup();
@@ -72,8 +69,8 @@ function stubTicketFetch(tickets: Array<string | null>) {
  */
 function stubDeferredTicketFetch() {
   const resolvers: Array<(response: TicketResponse) => void> = [];
-  const fetchMock = vi.fn((): Promise<TicketResponse> =>
-    new Promise((resolve) => resolvers.push(resolve))
+  const fetchMock = vi.fn(
+    (): Promise<TicketResponse> => new Promise((resolve) => resolvers.push(resolve)),
   );
   vi.stubGlobal("fetch", fetchMock);
   return {
@@ -95,8 +92,7 @@ function setup(
 ) {
   FakeEventSource.instances = [];
   const fetchMock = opts.fetchMock ?? stubTicketFetch(opts.tickets ?? [null]);
-  const createEventSource = (url: string) =>
-    new FakeEventSource(url) as unknown as EventSource;
+  const createEventSource = (url: string) => new FakeEventSource(url) as unknown as EventSource;
   const view = renderHook(
     (props: { serviceId: number | undefined }) =>
       useLiveComments(props.serviceId, {
@@ -115,11 +111,7 @@ async function flush() {
   });
 }
 
-function commentOf(
-  id: string,
-  source: CommentSourceId,
-  text: string,
-): SourceComment {
+function commentOf(id: string, source: CommentSourceId, text: string): SourceComment {
   return { id, source, at: 1718240401_000, text };
 }
 
@@ -136,9 +128,7 @@ describe("useLiveComments", () => {
     const { instances, fetchMock } = setup(10, { tickets: ["abc123"] });
     await flush();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(instances[0].url).toBe(
-      "/api/comments/services/10/stream?ticket=abc123",
-    );
+    expect(instances[0].url).toBe("/api/comments/services/10/stream?ticket=abc123");
   });
 
   it("チケットが null なら URL はそのまま (認証無効)", async () => {
@@ -187,9 +177,7 @@ describe("useLiveComments", () => {
     resolve(1, "new");
     await flush();
     expect(instances.length).toBe(1);
-    expect(instances[0].url).toBe(
-      "/api/comments/services/20/stream?ticket=new",
-    );
+    expect(instances[0].url).toBe("/api/comments/services/20/stream?ticket=new");
   });
 
   it("comment を取得元付きの LiveComment に変換して積む", async () => {
@@ -197,10 +185,7 @@ describe("useLiveComments", () => {
     await flush();
     act(() => {
       instances[0].emit("sources", JSON.stringify(["nicolive"]));
-      instances[0].emit(
-        "comment",
-        JSON.stringify(commentOf("a", "nicolive", "やあ")),
-      );
+      instances[0].emit("comment", JSON.stringify(commentOf("a", "nicolive", "やあ")));
     });
     expect(view.result.current.connected).toBe(true);
     expect(view.result.current.sources).toEqual(["nicolive"]);
@@ -222,20 +207,11 @@ describe("useLiveComments", () => {
     await flush();
     act(() => {
       instances[0].emit("sources", JSON.stringify(["nicolive", "nx-jikkyo"]));
-      instances[0].emit(
-        "comment",
-        JSON.stringify(commentOf("a", "nicolive", "ニコ生")),
-      );
-      instances[0].emit(
-        "comment",
-        JSON.stringify(commentOf("b", "nx-jikkyo", "NX")),
-      );
+      instances[0].emit("comment", JSON.stringify(commentOf("a", "nicolive", "ニコ生")));
+      instances[0].emit("comment", JSON.stringify(commentOf("b", "nx-jikkyo", "NX")));
     });
     expect(view.result.current.sources).toEqual(["nicolive", "nx-jikkyo"]);
-    expect(view.result.current.comments.map((c) => c.text)).toEqual([
-      "ニコ生",
-      "NX",
-    ]);
+    expect(view.result.current.comments.map((c) => c.text)).toEqual(["ニコ生", "NX"]);
   });
 
   it("sources が空なら実況非対応として切断する", async () => {
@@ -253,10 +229,7 @@ describe("useLiveComments", () => {
     await flush();
     act(() => {
       instances[0].emit("sources", JSON.stringify(["nicolive"]));
-      instances[0].emit(
-        "comment",
-        JSON.stringify(commentOf("a", "nicolive", "やあ")),
-      );
+      instances[0].emit("comment", JSON.stringify(commentOf("a", "nicolive", "やあ")));
     });
     act(() => {
       instances[0].emit("sources", JSON.stringify(["nicolive", "nx-jikkyo"]));
@@ -271,10 +244,7 @@ describe("useLiveComments", () => {
     await flush();
     act(() => {
       instances[0].emit("sources", JSON.stringify(["nicolive"]));
-      instances[0].emit(
-        "comment",
-        JSON.stringify(commentOf("a", "nicolive", "old")),
-      );
+      instances[0].emit("comment", JSON.stringify(commentOf("a", "nicolive", "old")));
     });
     expect(view.result.current.comments.length).toBe(1);
 

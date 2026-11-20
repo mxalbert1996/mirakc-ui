@@ -4,21 +4,18 @@
  * このエンドポイントは mirakc ではなく mirakc-ui 自身の Hono が提供するため、
  * mirakc の OpenAPI から生成する $api (openapi-react-query) には含まれない。
  * 素の fetch を薄くラップする。型は docs/api の OpenAPI から
- * `deno task generate:internal` で生成した JSON Schema 定数
- * (server/lib/api/internal-schemas.ts) を単一ソースとし、server と同じく
+ * 旧 `deno task generate:internal`（廃止済み。同じ中身は docs/api の
+ * `emit-server-schemas` で再生成できる）が生成した JSON Schema 定数
+ * (client/lib/api/internal-schemas.ts) を単一ソースとし、Go サーバと同じく
  * json-schema-to-ts の FromSchema で導出する (keyword-rules クライアントと同形)。
  */
 import type { FromSchema } from "json-schema-to-ts";
-import type { internalSchemas } from "../../../server/lib/api/internal-schemas.ts";
+import type { internalSchemas } from "./internal-schemas.ts";
 
-export type LiveCommentAssignment = FromSchema<
-  typeof internalSchemas["LiveCommentAssignment"]
->;
-export type LiveCommentMapping = FromSchema<
-  typeof internalSchemas["LiveCommentMapping"]
->;
+export type LiveCommentAssignment = FromSchema<(typeof internalSchemas)["LiveCommentAssignment"]>;
+export type LiveCommentMapping = FromSchema<(typeof internalSchemas)["LiveCommentMapping"]>;
 export type LiveCommentMappingInput = FromSchema<
-  typeof internalSchemas["LiveCommentMappingInput"]
+  (typeof internalSchemas)["LiveCommentMappingInput"]
 >;
 
 const BASE_PATH = "/api/live-comment-settings";

@@ -1,37 +1,5 @@
 # 実装・運用の知見
 
-## devcontainer の vite (app) が `deno task check/fix` で crash する
-
-> 以下は旧 Fresh 構成（`@fresh/plugin-vite`）で観測された事象。現 Vite + `@deno/vite-plugin` / `@vitejs/plugin-react` 構成で再発するかは未確認だが、`deno fmt` の一時ファイルと dev server の FsWatcher が競合しうる構造は共通する。再発したら同じ対処を試す。
-
-### 症状
-
-ホスト側で `deno task check` や `deno task fix` を実行すると、しばらくして devcontainer の `app` コンテナ (vite dev server) が以下のようなエラーで停止する。
-
-```
-error: Uncaught NotFound: No such file or directory (os error 2) about
-  ["/app/components/.../SomeFile.tsx.tmp.<pid>.<ts>"]
-    at new FsWatcher (ext:runtime/40_fs_events.js:23:17)
-    ...
-```
-
-`deno fmt` が一時ファイル (`.tmp.<pid>.<timestamp>`) を作って即 rename で削除するが、devcontainer 内の Fresh プラグイン（`@fresh/plugin-vite`）の FsWatcher が監視開始する前に元ファイルが消えて NotFound → uncaught で deno プロセス終了、という流れ。
-
-### 対処
-
-一時的には次で復旧する。
-
-```sh
-docker compose --project-name mirakc-ui -f .devcontainer/compose.yaml restart app
-```
-
-恒常的には以下のいずれか:
-
-- `deno task check/fix` は devcontainer の `app` を停止した状態で実行する (ホスト側で fmt が終わってから `restart app`)
-- または `check/fix` をホスト側でなく devcontainer 内部の別シェルで実行する (vite 本体とは別プロセスになり FsWatcher 競合を起こしにくい)
-
-`.gitignore` に `*.tmp.*` を足しても Fresh 側の watcher 抑制にはならない (watcher は git 無関係)。
-
 ## React / TanStack の hook 規約
 
 - **render body 内で `setState` を呼ばない** — React のアンチパターン。`useEffect` に寄せる。
@@ -81,11 +49,11 @@ const responseBody = new ReadableStream<Uint8Array>({
 
 また `stderr` は `piped` にして必ずログに吐くこと。`"null"` だと障害解析ができない。改行単位で `console.error` に流すヘルパを用意するのが定石。
 
-## deno task dev の `&` で起動した子プロセスが残る
+## dev サーバ・Go サーバの残骸がポートを握る
 
-`deno task dev` は `deno serve ... server/main.ts & vite` の形で Hono(:8000) と Vite(:5173) を並行起動する。deno_task_shell は trap やプロセスグループ kill を持たないため、このタスクを停止（Ctrl-C / kill / harness の TaskStop）しても `&` でバックグラウンド起動した Hono（`deno serve --watch`）が孤児として残り、8000 番ポートを占有し続けることがある。次回の `deno task dev` / `deno task start` が `AddrInUse (os error 98)` で起動失敗する。
+`pnpm dev` は concurrently で Go サーバ(:8000) と Vite(:5173) を並行起動する（`-k` で伝播するため孤児は残らない）。それでも 8000 番ポートが占有される場合は `go run` の残骸が考えられる。
 
-`pgrep -af server/main.ts` で確認し、`pkill -f server/main.ts` で始末する。`vite` 側も同様に残る場合は `pkill -f vite`。
+`pgrep -af mirakc-ui` で確認し、`pkill -f mirakc-ui` で始末する。
 
 ## Deno で外部エンコーダを実 probe 検出する
 
@@ -114,17 +82,15 @@ const responseBody = new ReadableStream<Uint8Array>({
 - PR ブランチを main と同期するときは rebase ではなく merge commit で十分 (CI の synchronize が自動再走するため)。
 - destructive な操作 (`git reset --hard`, `git push --force`) は明示指示が無ければ避ける。
 
-## 動作確認のアプローチ (自動テスト無し前提)
+## 動作確認のアプローチ
 
-本リポジトリには自動テストスイートが存在しない。機能確認は以下の手順で行う。
+自動テストは client (`pnpm test` — vitest) と server (`cd server-go && go test -race ./...`) で維持されている。型は `pnpm check`、lint/fmt は `pnpm lint`。テストが効かない UI / ストリーム挙動は以下で確認する。
 
-1. **dev サーバ起動**: `deno task dev` が Hono(:8000) と Vite(:5173) を並行起動する。`/api` は Vite proxy 経由で Hono に届く。devcontainer の `app` サービスも同じく `deno task dev` を起動する（VS Code "Reopen in Container" または `devcontainer up --workspace-folder .`）。
+1. **dev サーバ起動**: `pnpm dev` が Go API サーバ(:8000) と Vite(:5173) を並行起動する。`/api` は Vite proxy 経由で Go サーバに届く。
 2. **ホスト名経由のアクセス**: Raspberry Pi 等のリモート環境で開発する場合は `VITE_ALLOWED_HOSTS` env を設定した上で `http://<host>:5173/` にブラウザでアクセス。
 3. **ブラウザ DevTools で検証**: Chrome の DevTools (`mcp__chrome-devtools__*` MCP が使える環境なら Claude Code からも操作可) で以下を観察する。
    - Console タブ: エラー / 警告の発生状況
    - Network タブ: API リクエストのステータス、ストリームの `Content-Type`、レスポンスサイズ
-   - Elements タブ: `<video>` / `<canvas>` / state を反映した DOM 属性
-4. **サーバログの確認**: `docker logs mirakc-ui-app-1` で vite / deno のログ、tsreadex / ffmpeg / encoder-probe の stderr を追う。
+   - Elements タブ: `<video>` / `<canvas>` / state を反映する DOM 属性
+4. **サーバログの確認**: `docker logs <コンテナ>` で slog の JSON ログ、tsreadex / ffmpeg の stderr を追う。
 5. **サービスプロセスの確認**: `pgrep -af 'ffmpeg|tsreadex'` でゾンビ子プロセスの有無を確認する。client 切断後も残っている場合はクリーンアップが効いていない。
-
-`deno task check` は CI 相当のチェックだが型 / lint / fmt のみで機能回帰までは見ない。UI / ストリーム挙動は毎回ブラウザで目視すること。

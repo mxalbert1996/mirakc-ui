@@ -6,9 +6,12 @@ const meta = {
   component: DiscordCard,
   args: {
     webhookUrl: "https://discord.com/api/webhooks/123456789012345678/abcdef",
+    webhookUrlSet: false,
+    webhookUrlClearPending: false,
     testEnabled: true,
     testing: false,
     onChangeWebhookUrl: () => {},
+    onToggleWebhookClear: () => {},
     onTest: () => {},
   },
 } satisfies Meta<typeof DiscordCard>;

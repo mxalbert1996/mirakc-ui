@@ -8,3 +8,10 @@ node_modules/
 docs/api/node_modules/
 docs/api/dist/
 docs/api/.cache/
+
+data/
+coverage/
+storybook-static/
+.design-sync/
+.codegraph/
+.local/

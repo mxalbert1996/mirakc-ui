@@ -10,11 +10,7 @@ import {
 import { useProgramQueries } from "../../hooks/use-program-queries.ts";
 import { useSlimPrograms } from "../../hooks/use-slim-programs.ts";
 import { useNow } from "../../hooks/use-now.ts";
-import {
-  nowEpochMs,
-  startOfHourEpochMs,
-  zonedFromEpochMs,
-} from "../../lib/datetime.ts";
+import { nowEpochMs, startOfHourEpochMs, zonedFromEpochMs } from "../../lib/datetime.ts";
 import { t } from "../../locales/i18n.ts";
 import LoadingTemplate from "../../components/templates/Loading.tsx";
 import ProgramTemplate from "../../components/templates/Program.tsx";
@@ -44,9 +40,7 @@ export const Route = createFileRoute("/program/$channelType")({
     }
   },
   validateSearch: (search: Record<string, unknown>): ProgramSearch => ({
-    d: search.d !== undefined && Number.isInteger(Number(search.d))
-      ? Number(search.d)
-      : undefined,
+    d: search.d !== undefined && Number.isInteger(Number(search.d)) ? Number(search.d) : undefined,
   }),
   component: ProgramLayout,
 });

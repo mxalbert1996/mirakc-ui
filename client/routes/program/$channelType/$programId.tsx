@@ -26,10 +26,7 @@ function ProgramDetailModal() {
 
   const { services, recordingSchedules } = useProgramQueries();
   const addRecordingSchedule = $api.useMutation("post", "/recording/schedules");
-  const removeRecordingSchedule = $api.useMutation(
-    "delete",
-    "/recording/schedules/{program_id}",
-  );
+  const removeRecordingSchedule = $api.useMutation("delete", "/recording/schedules/{program_id}");
 
   // 詳細モーダルは description / extended を表示するため、一覧ではなく ID 指定で
   // フル番組を取得する。取得中はシェルだけ開いて待ち、404 等で取れなければ閉じる。
@@ -49,9 +46,7 @@ function ProgramDetailModal() {
     });
 
   const program = fullProgramOf(programQuery.data);
-  const service = program
-    ? serviceOfProgram(services.data ?? [], program)
-    : undefined;
+  const service = program ? serviceOfProgram(services.data ?? [], program) : undefined;
   const schedule = program
     ? (recordingSchedules.data ?? []).find((s) => s.program.id === program.id)
     : undefined;
@@ -69,9 +64,7 @@ function ProgramDetailModal() {
     await addRecordingSchedule.mutateAsync({
       body: {
         options: {
-          contentPath: `${
-            formatYmdHms(target.startAt)
-          }_${target.id}_${target.name}.m2ts`,
+          contentPath: `${formatYmdHms(target.startAt)}_${target.id}_${target.name}.m2ts`,
         },
         programId: target.id,
       },
@@ -93,10 +86,12 @@ function ProgramDetailModal() {
       recordingSchedule={schedule}
       addRecordingSchedule={handleAddRecordingSchedule}
       removeRecordingSchedule={handleRemoveRecordingSchedule}
-      loading={programQuery.isPending ||
+      loading={
+        programQuery.isPending ||
         recordingSchedules.isPending ||
         addRecordingSchedule.isPending ||
-        removeRecordingSchedule.isPending}
+        removeRecordingSchedule.isPending
+      }
       currentDate={currentDate}
       open={isNumericId && (programQuery.isPending || program !== undefined)}
       onClose={handleClose}

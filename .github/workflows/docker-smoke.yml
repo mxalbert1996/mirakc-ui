@@ -1,0 +1,55 @@
+name: Docker smoke
+
+# Docker イメージのビルド smoke。ffmpeg ビルド (~15 分) が重いため PR では
+# Dockerfile・toolchain 関連パスの変更時のみ走らせ、main push と手動実行では
+# 常に検証する (publish-docker.yml は手動 dispatch のため、ここが publish 前の
+# 最後の自動確認)。
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker/**"
+      - "server-go/**"
+      - "client/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".npmrc"
+      - "pnpm-workspace.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Build the runtime image
+        run: docker build -t mirakc-ui:ci-smoke .
+
+      - name: Boot smoke
+        run: |
+          docker run --rm -d --name ci-smoke -p 18080:8000 mirakc-ui:ci-smoke
+          code=""
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/keyword-rules || true)
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          if [ "$code" != "200" ]; then docker logs ci-smoke; exit 1; fi
+          docker exec ci-smoke sh -c 'test "$(id -u)" = 900 && ! command -v deno'
+          docker rm -f ci-smoke

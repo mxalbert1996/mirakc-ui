@@ -38,27 +38,17 @@ export default function DiscordCard(props: Props) {
         </span>
         <div>
           <h2 className={styles.title}>{t("notification.discord.title")}</h2>
-          <p className={styles.description}>
-            {t("notification.discord.description")}
-          </p>
+          <p className={styles.description}>{t("notification.discord.description")}</p>
         </div>
       </div>
 
       <div className={styles.body}>
         <div className={styles.field}>
           <div className={styles.fieldHead}>
-            <span className={styles.fieldLabel}>
-              {t("notification.discord.url")}
-            </span>
+            <span className={styles.fieldLabel}>{t("notification.discord.url")}</span>
             {props.webhookUrlSet && (
-              <span
-                className={props.webhookUrlClearPending
-                  ? styles.setTagPending
-                  : styles.setTag}
-              >
-                <Icon size={12}>
-                  {props.webhookUrlClearPending ? "delete" : "check_circle"}
-                </Icon>
+              <span className={props.webhookUrlClearPending ? styles.setTagPending : styles.setTag}>
+                <Icon size={12}>{props.webhookUrlClearPending ? "delete" : "check_circle"}</Icon>
                 {props.webhookUrlClearPending
                   ? t("notification.discord.urlClearPending")
                   : t("notification.discord.urlConfigured")}
@@ -78,34 +68,24 @@ export default function DiscordCard(props: Props) {
           </div>
           <input
             type="password"
-            className={`${styles.input} ${
-              props.urlError !== undefined ? styles.inputBad : ""
-            }`}
+            className={`${styles.input} ${props.urlError !== undefined ? styles.inputBad : ""}`}
             value={props.webhookUrl}
-            placeholder={props.webhookUrlSet
-              ? t("notification.discord.urlConfiguredPlaceholder")
-              : t("notification.discord.urlPlaceholder")}
+            placeholder={
+              props.webhookUrlSet
+                ? t("notification.discord.urlConfiguredPlaceholder")
+                : t("notification.discord.urlPlaceholder")
+            }
             spellCheck={false}
             autoComplete="off"
             onChange={(event) => props.onChangeWebhookUrl(event.target.value)}
           />
-          {props.urlError === "invalid"
-            ? (
-              <p className={styles.fieldError}>
-                {t("notification.discord.urlInvalid")}
-              </p>
-            )
-            : props.urlError === "required"
-            ? (
-              <p className={styles.fieldError}>
-                {t("notification.discord.urlRequired")}
-              </p>
-            )
-            : (
-              <p className={styles.fieldHint}>
-                {t("notification.discord.urlHint")}
-              </p>
-            )}
+          {props.urlError === "invalid" ? (
+            <p className={styles.fieldError}>{t("notification.discord.urlInvalid")}</p>
+          ) : props.urlError === "required" ? (
+            <p className={styles.fieldError}>{t("notification.discord.urlRequired")}</p>
+          ) : (
+            <p className={styles.fieldHint}>{t("notification.discord.urlHint")}</p>
+          )}
         </div>
       </div>
 

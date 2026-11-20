@@ -1,10 +1,19 @@
-FROM --platform=$BUILDPLATFORM docker.io/denoland/deno:2.9.8 AS mirakc-ui-build
+# Client build stage. The client is plain JS/CSS bundled by Vite — nothing
+# native is compiled — so the stage runs on the build platform regardless of
+# the target architecture (mirrors the Go cross-compile stage below).
+# Node 26 no longer bundles corepack, so pnpm is installed through npm; the
+# version must match the packageManager field in package.json.
+FROM --platform=$BUILDPLATFORM docker.io/library/node:26 AS mirakc-ui-build
 
 WORKDIR /app
 
+# Cache the dependency install separately from the sources so ordinary code
+# edits do not re-download packages. The node image's git is required by
+# mpegts.js, which resolves one dependency from a github fork.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+RUN npm install -g pnpm@12.21.0 && pnpm install --frozen-lockfile
 COPY . .
-RUN deno install
-RUN deno task build
+RUN pnpm build
 
 # Cross-compile the Go server the same way as the client builder above: run
 # the compiler on the build platform and target $TARGETOS/$TARGETARCH, so
@@ -81,7 +90,7 @@ RUN <<EOF
     make install
 EOF
 
-# server/routes/transcode.ts と server/lib/encoder.ts が使う機能を列挙する。
+# server-go/internal/transcode が使う機能を列挙する。
 # - 入力: mpegts (pipe:0) / MPEG-2, H.264, AAC (AAC-LATM) のデコード
 # - 映像: libx264 (ソフトウェア) / h264_v4l2m2m (HW H.264) / hevc_v4l2m2m (HW HEVC)
 #   と yadif, scale, format。HW エンコーダは SPS の VUI を書かず SAR が消える
