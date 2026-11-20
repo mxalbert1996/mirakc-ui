@@ -1,9 +1,8 @@
 name: Docker smoke
 
-# Docker イメージのビルド smoke。ffmpeg ビルド (~15 分) が重いため PR では
-# Dockerfile・toolchain 関連パスの変更時のみ走らせ、main push と手動実行では
-# 常に検証する (publish-docker.yml は手動 dispatch のため、ここが publish 前の
-# 最後の自動確認)。
+# Docker イメージのビルド smoke。publish-docker.yml は手動 dispatch のため、
+# ここが publish 前の最後の自動確認。PR では Dockerfile・toolchain 関連パス
+# の変更時のみ走らせ、main push と手動実行では常に検証する。
 on:
   push:
     branches:

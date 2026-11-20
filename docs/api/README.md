@@ -5,7 +5,7 @@ mirakc-ui のアプリサーバ (Hono) が提供する内部 API である。mir
 - キーワード自動録画ルールの CRUD。
 - ntfy への録画イベント通知の設定とテスト送信。
 
-認証は既定では無効である。環境変数 AUTH_TOKEN を設定すると、すべてのリクエストでヘッダによる認証 (Authorization の Bearer または Basic、X-Auth-Token) を要求する。EventSource と mpegts.js はヘッダを設定できないため、ストリームの取得では POST /api/auth/ticket が発行するワンタイムチケットを ticket クエリパラメータで渡す。mirakc 由来の API は mirakc 自身の OpenAPI で管理し、この文書には含めない。
+認証は既定では無効である。環境変数 AUTH_TOKEN を設定すると、すべてのリクエストでヘッダによる認証 (Authorization の Bearer または Basic、X-Auth-Token) を要求する。EventSource と mpegts.js はヘッダを設定できないため、ストリームの取得では POST `/api/auth/ticket` が発行するワンタイムチケットを ticket クエリパラメータで渡す。mirakc 由来の API は mirakc 自身の OpenAPI で管理し、この文書には含めない。
 
 ## 開発
 

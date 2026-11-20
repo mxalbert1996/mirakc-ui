@@ -16,7 +16,7 @@ get:
     - in: query
       name: ticket
       required: false
-      description: AUTH_TOKEN による認証が有効なときのワンタイムチケット。EventSource はヘッダを設定できないため、POST /api/auth/ticket で発行したチケットをここで渡す。
+      description: AUTH_TOKEN による認証が有効なときのワンタイムチケット。EventSource はヘッダを設定できないため、POST `/api/auth/ticket` で発行したチケットをここで渡す。
       schema:
         type: string
   responses:

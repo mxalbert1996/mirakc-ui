@@ -297,7 +297,7 @@ type ResponseError struct {
 
 // GetCommentsServicesIdStreamParams defines parameters for GetCommentsServicesIdStream.
 type GetCommentsServicesIdStreamParams struct {
-	// Ticket AUTH_TOKEN による認証が有効なときのワンタイムチケット。EventSource はヘッダを設定できないため、POST /api/auth/ticket で発行したチケットをここで渡す。
+	// Ticket AUTH_TOKEN による認証が有効なときのワンタイムチケット。EventSource はヘッダを設定できないため、POST `/api/auth/ticket` で発行したチケットをここで渡す。
 	Ticket *string `form:"ticket,omitempty" json:"ticket,omitempty"`
 }
 
@@ -315,7 +315,7 @@ type GetTranscodeServicesIdParams struct {
 	// Raw 1 を指定すると再エンコードを抑えた raw モードで配信する。
 	Raw *GetTranscodeServicesIdParamsRaw `form:"raw,omitempty" json:"raw,omitempty"`
 
-	// Ticket AUTH_TOKEN による認証が有効なときのワンタイムチケット。mpegts.js はヘッダを設定できないため、POST /api/auth/ticket で発行したチケットをここで渡す。
+	// Ticket AUTH_TOKEN による認証が有効なときのワンタイムチケット。mpegts.js はヘッダを設定できないため、POST `/api/auth/ticket` で発行したチケットをここで渡す。
 	Ticket *string `form:"ticket,omitempty" json:"ticket,omitempty"`
 }
 
