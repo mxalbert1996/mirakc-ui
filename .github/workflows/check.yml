@@ -98,7 +98,9 @@ jobs:
         run: |
           npm run bundle:json
           npm run emit-server-schemas -- ../../client/lib/api/internal-schemas.ts
-          npx --yes oxfmt@0.77.0 ../../client/lib/api/internal-schemas.ts
+          # oxfmt は ".." を含むパスを受け付けないため、リポジトリルートから実行する。
+          cd ../..
+          npx --yes oxfmt@0.77.0 client/lib/api/internal-schemas.ts
 
       # server-go/internal/api/types.gen.go が OpenAPI から再生成した内容と一致すること。
       # ローカルと同じ手順 (internal/api/generate.sh) を go run で再現する。
