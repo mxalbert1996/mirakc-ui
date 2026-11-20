@@ -265,7 +265,7 @@ func TestFfmpegAndTsreadexArgsPinned(t *testing.T) {
 		"-ignore_unknown",
 		"-max_delay", "250000",
 		"-max_interleave_delta", "500000",
-		"-vf", "yadif=mode=0:parity=-1:deint=1,scale=-2:1080",
+		"-vf", "yadif=mode=0:parity=-1:deint=1,scale=-2:'min(ih,1080)'",
 		"-c:v", "libx264", "-preset", "superfast", "-tune", "zerolatency", "-crf", "27", "-g", "15", "-sc_threshold", "0",
 		"-c:a", "aac",
 		"-b:a", "192k",

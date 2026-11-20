@@ -108,9 +108,9 @@ func TestBuildVideoFilter(t *testing.T) {
 		quality Quality
 		want    string
 	}{
-		{EncoderH264V4l2m2m, Quality1080p, "yadif=mode=0:parity=-1:deint=1,scale=-2:1080,format=yuv420p"},
-		{EncoderHevcV4l2m2m, Quality720p, "yadif=mode=0:parity=-1:deint=1,scale=-2:720,format=yuv420p"},
-		{EncoderLibx264, Quality1080p, "yadif=mode=0:parity=-1:deint=1,scale=-2:1080"},
+		{EncoderH264V4l2m2m, Quality1080p, "yadif=mode=0:parity=-1:deint=1,scale=-2:'min(ih,1080)',format=yuv420p"},
+		{EncoderHevcV4l2m2m, Quality720p, "yadif=mode=0:parity=-1:deint=1,scale=-2:'min(ih,720)',format=yuv420p"},
+		{EncoderLibx264, Quality1080p, "yadif=mode=0:parity=-1:deint=1,scale=-2:'min(ih,1080)'"},
 	}
 	for _, c := range cases {
 		if got := BuildVideoFilter(c.encoder, c.quality); got != c.want {
@@ -166,9 +166,9 @@ func TestIsV4l2BusyLocalized(t *testing.T) {
 
 func TestQualitySettings(t *testing.T) {
 	want := map[Quality]QualitySetting{
-		Quality480p:  {Scale: "-2:480", Bitrate: "1000k", CRF: 27, QP: V4l2QP{H264: 29, Hevc: 26}},
-		Quality720p:  {Scale: "-2:720", Bitrate: "2000k", CRF: 27, QP: V4l2QP{H264: 29, Hevc: 26}},
-		Quality1080p: {Scale: "-2:1080", Bitrate: "4500k", CRF: 27, QP: V4l2QP{H264: 28, Hevc: 25}},
+		Quality480p:  {Scale: "-2:'min(ih,480)'", Bitrate: "1000k", CRF: 27, QP: V4l2QP{H264: 29, Hevc: 26}},
+		Quality720p:  {Scale: "-2:'min(ih,720)'", Bitrate: "2000k", CRF: 27, QP: V4l2QP{H264: 29, Hevc: 26}},
+		Quality1080p: {Scale: "-2:'min(ih,1080)'", Bitrate: "4500k", CRF: 27, QP: V4l2QP{H264: 28, Hevc: 25}},
 	}
 	if !reflect.DeepEqual(QualitySettings, want) {
 		t.Fatalf("QualitySettings = %+v, want %+v", QualitySettings, want)
@@ -319,7 +319,7 @@ func TestBuildProbeArgs(t *testing.T) {
 	want := []string{
 		"-hide_banner", "-v", "error",
 		"-f", "lavfi", "-i", "testsrc=size=1440x1080:rate=30:duration=0.34",
-		"-vf", "yadif=mode=0:parity=-1:deint=1,scale=-2:720",
+		"-vf", "yadif=mode=0:parity=-1:deint=1,scale=-2:'min(ih,720)'",
 		"-c:v", "libx264", "-preset", "superfast", "-tune", "zerolatency", "-crf", "27", "-g", "15", "-sc_threshold", "0",
 		"-frames:v", "10", "-f", "null", "-",
 	}

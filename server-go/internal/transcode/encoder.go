@@ -36,6 +36,10 @@ type V4l2QP struct {
 }
 
 type QualitySetting struct {
+	// Scale caps the output at the preset's lines (scale=-2:'min(ih,N)'):
+	// presets only ever downscale, so a 480-line source stays 480 lines
+	// even at quality=1080p — upscaling SD wasted encoder bitrate on
+	// pixels the source never had.
 	Scale   string
 	Bitrate string
 	CRF     int
@@ -46,9 +50,9 @@ type QualitySetting struct {
 // match the average bitrate of the old bitrate-only settings measured
 // over five real streams (docs/transcode-quality.md).
 var QualitySettings = map[Quality]QualitySetting{
-	Quality480p:  {Scale: "-2:480", Bitrate: "1000k", CRF: x264CRF, QP: V4l2QP{H264: 29, Hevc: 26}},
-	Quality720p:  {Scale: "-2:720", Bitrate: "2000k", CRF: x264CRF, QP: V4l2QP{H264: 29, Hevc: 26}},
-	Quality1080p: {Scale: "-2:1080", Bitrate: "4500k", CRF: x264CRF, QP: V4l2QP{H264: 28, Hevc: 25}},
+	Quality480p:  {Scale: "-2:'min(ih,480)'", Bitrate: "1000k", CRF: x264CRF, QP: V4l2QP{H264: 29, Hevc: 26}},
+	Quality720p:  {Scale: "-2:'min(ih,720)'", Bitrate: "2000k", CRF: x264CRF, QP: V4l2QP{H264: 29, Hevc: 26}},
+	Quality1080p: {Scale: "-2:'min(ih,1080)'", Bitrate: "4500k", CRF: x264CRF, QP: V4l2QP{H264: 28, Hevc: 25}},
 }
 
 func (s QualitySetting) qpFor(encoder EncoderName) int {
