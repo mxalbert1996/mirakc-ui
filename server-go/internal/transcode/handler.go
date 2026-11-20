@@ -396,6 +396,11 @@ func (h *handler) ffmpegArgs(opts attemptOpts) []string {
 		"-map", "-0:#0x12",
 		"-ignore_unknown",
 		"-max_delay", "250000",
+		// A sparse mapped stream (no-caption services carry an ID3
+		// stream with no packets) otherwise holds the muxer until every
+		// stream has a packet: measured 15s of silence, then a burst
+		// every ~5s. Cap the wait instead.
+		"-max_interleave_delta", "500000",
 		"-vf", BuildVideoFilter(opts.encoder, opts.quality),
 	}
 	args = append(args, BuildVideoEncoderArgs(opts.encoder, opts.quality, h.v4l2Cq)...)
@@ -409,8 +414,11 @@ func (h *handler) ffmpegArgs(opts attemptOpts) []string {
 }
 
 // tsreadexArgs stabilize the stream and shape ARIB subtitles (raw mode
-// skips it entirely).
-var tsreadexArgs = []string{"-n", "-1", "-a", "13", "-b", "5", "-c", "5", "-u", "1", "-d", "13", "-"}
+// skips it entirely). -c complements the caption stream but does NOT
+// fabricate dummy data every 5s: on no-caption services those were the
+// only ID3 packets, which starved the muxer's interleave wait (see
+// -max_interleave_delta).
+var tsreadexArgs = []string{"-n", "-1", "-a", "13", "-b", "5", "-c", "1", "-u", "1", "-d", "13", "-"}
 
 func (a *attempt) children() []Cmd {
 	if a.tsreadex == nil {

@@ -264,6 +264,7 @@ func TestFfmpegAndTsreadexArgsPinned(t *testing.T) {
 		"-map", "-0:#0x12",
 		"-ignore_unknown",
 		"-max_delay", "250000",
+		"-max_interleave_delta", "500000",
 		"-vf", "yadif=mode=0:parity=-1:deint=1,scale=-2:1080",
 		"-c:v", "libx264", "-preset", "superfast", "-tune", "zerolatency", "-crf", "27", "-g", "15", "-sc_threshold", "0",
 		"-c:a", "aac",
@@ -275,7 +276,7 @@ func TestFfmpegAndTsreadexArgsPinned(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("ffmpegArgs = %q, want %q", got, want)
 	}
-	if !slices.Equal(tsreadexArgs, []string{"-n", "-1", "-a", "13", "-b", "5", "-c", "5", "-u", "1", "-d", "13", "-"}) {
+	if !slices.Equal(tsreadexArgs, []string{"-n", "-1", "-a", "13", "-b", "5", "-c", "1", "-u", "1", "-d", "13", "-"}) {
 		t.Fatalf("tsreadexArgs = %q", tsreadexArgs)
 	}
 }
